@@ -1,0 +1,39 @@
+server:
+  port: 9090
+
+spring:
+  application:
+    name: stock-agent-app
+  datasource:
+    url: jdbc:mysql://localhost:3306/stock_agent?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
+    username: root
+    password: '123456'
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+
+mybatis-plus:
+  mapper-locations: classpath:mapper/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: assign_id
+
+# 小米MiMo大模型
+ai:
+  api-key: tp-c7ksbaxfovpa4uz964cz23earn494yjd0ob745rej7fyn3c4
+  model: mimo-v2.5-pro
+  base-url: https://token-plan-cn.xiaomimimo.com/v1
+
+# 禁用LangChain4j自动配置
+langchain4j:
+  open-ai:
+    chat-model:
+      enabled: false
+
+logging:
+  level:
+    com.stockagent: debug

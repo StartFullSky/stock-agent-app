@@ -1,0 +1,32 @@
+package com.stockagent.config;
+
+import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.openai.OpenAiChatModel;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class AiConfig {
+
+    @Value("${ai.api-key}")
+    private String apiKey;
+
+    @Value("${ai.model}")
+    private String model;
+
+    @Value("${ai.base-url}")
+    private String baseUrl;
+
+    @Bean
+    public ChatLanguageModel chatLanguageModel() {
+        return OpenAiChatModel.builder()
+                .apiKey(apiKey)
+                .modelName(model)
+                .baseUrl(baseUrl)
+                .temperature(0.7)
+                .logRequests(true)
+                .logResponses(true)
+                .build();
+    }
+}
