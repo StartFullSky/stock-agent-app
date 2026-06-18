@@ -5,9 +5,14 @@ import com.stockagent.mapper.ChatHistoryMapper;
 import com.stockagent.service.AgentService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Tag(name = "AI对话")
 @RestController
@@ -16,49 +21,70 @@ public class ChatController {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ChatController.class);
     private final AgentService agentService;
     private final ChatHistoryMapper chatHistoryMapper;
+    private final ExecutorService executor = Executors.newCachedThreadPool();
 
     public ChatController(AgentService agentService, ChatHistoryMapper chatHistoryMapper) {
         this.agentService = agentService;
         this.chatHistoryMapper = chatHistoryMapper;
     }
 
-    @Operation(summary = "发送消息")
+    @Operation(summary = "发送消息（同步）")
     @PostMapping
     public Map<String, Object> chat(@RequestBody Map<String, String> request) {
         Map<String, Object> result = new HashMap<>();
         try {
             String message = request.get("message");
             log.info("收到消息: {}", message);
-
-            // 保存用户消息
-            ChatHistory userMsg = new ChatHistory();
-            userMsg.setUserId(0L);
-            userMsg.setRole("user");
-            userMsg.setContent(message);
-            userMsg.setCreatedAt(LocalDateTime.now());
-            chatHistoryMapper.insert(userMsg);
-
-            // 调用AI
+            saveChat(0L, "user", message);
             String reply = agentService.chat(0L, message);
-
-            // 保存AI回复
-            ChatHistory aiMsg = new ChatHistory();
-            aiMsg.setUserId(0L);
-            aiMsg.setRole("assistant");
-            aiMsg.setContent(reply);
-            aiMsg.setCreatedAt(LocalDateTime.now());
-            chatHistoryMapper.insert(aiMsg);
-
-            result.put("code", 200);
-            result.put("data", reply);
-            result.put("success", true);
+            saveChat(0L, "assistant", reply);
+            result.put("code", 200); result.put("data", reply); result.put("success", true);
         } catch (Exception e) {
             log.error("AI对话失败", e);
-            result.put("code", 500);
-            result.put("message", "AI对话失败: " + e.getMessage());
-            result.put("success", false);
+            result.put("code", 500); result.put("message", "AI对话失败: " + e.getMessage()); result.put("success", false);
         }
         return result;
+    }
+
+    @Operation(summary = "流式对话（SSE）")
+    @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter chatStream(@RequestBody Map<String, String> request) {
+        SseEmitter emitter = new SseEmitter(120000L);
+        String message = request.get("message");
+        log.info("流式消息: {}", message);
+
+        executor.submit(() -> {
+            try {
+                saveChat(0L, "user", message);
+                // 发送开始事件
+                emitter.send(SseEmitter.event().name("start").data(""));
+
+                String reply = agentService.chat(0L, message);
+                saveChat(0L, "assistant", reply);
+
+                // 模拟流式：逐段发送
+                String[] parts = reply.split("(?<=\\n)");
+                StringBuilder sent = new StringBuilder();
+                for (String part : parts) {
+                    sent.append(part);
+                    emitter.send(SseEmitter.event().name("message").data(part));
+                    Thread.sleep(30);
+                }
+
+                emitter.send(SseEmitter.event().name("done").data(""));
+                emitter.complete();
+            } catch (Exception e) {
+                log.error("流式对话失败", e);
+                try {
+                    emitter.send(SseEmitter.event().name("error").data("对话失败: " + e.getMessage()));
+                } catch (Exception ignored) {}
+                emitter.completeWithError(e);
+            }
+        });
+
+        emitter.onTimeout(emitter::complete);
+        emitter.onError(t -> {});
+        return emitter;
     }
 
     @Operation(summary = "测试对话（GET）")
@@ -86,13 +112,9 @@ public class ChatController {
                     .last("LIMIT " + limit)
             );
             Collections.reverse(list);
-            result.put("code", 200);
-            result.put("data", list);
-            result.put("success", true);
+            result.put("code", 200); result.put("data", list); result.put("success", true);
         } catch (Exception e) {
-            result.put("code", 500);
-            result.put("message", e.getMessage());
-            result.put("success", false);
+            result.put("code", 500); result.put("message", e.getMessage()); result.put("success", false);
         }
         return result;
     }
@@ -106,14 +128,18 @@ public class ChatController {
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatHistory>()
                     .eq(ChatHistory::getUserId, 0L)
             );
-            result.put("code", 200);
-            result.put("data", "已清空");
-            result.put("success", true);
+            result.put("code", 200); result.put("data", "已清空"); result.put("success", true);
         } catch (Exception e) {
-            result.put("code", 500);
-            result.put("message", e.getMessage());
-            result.put("success", false);
+            result.put("code", 500); result.put("message", e.getMessage()); result.put("success", false);
         }
         return result;
+    }
+
+    private void saveChat(Long userId, String role, String content) {
+        try {
+            ChatHistory msg = new ChatHistory();
+            msg.setUserId(userId); msg.setRole(role); msg.setContent(content); msg.setCreatedAt(LocalDateTime.now());
+            chatHistoryMapper.insert(msg);
+        } catch (Exception e) { log.warn("保存对话失败: {}", e.getMessage()); }
     }
 }

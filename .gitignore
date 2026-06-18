@@ -27,3 +27,4 @@ logs/
 # Env
 .env
 *.env.local
+.env.example
