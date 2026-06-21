@@ -1,13 +1,15 @@
 package com.stockagent.controller;
 
+import com.stockagent.common.ApiResponse;
 import com.stockagent.service.FavoriteService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.*;
+import java.util.List;
+import java.util.Map;
 
-@Tag(name = "Favorites API")
+@Tag(name = "收藏接口")
 @RestController
 @RequestMapping("/api/favorite")
 public class FavoriteController {
@@ -18,61 +20,28 @@ public class FavoriteController {
         this.favoriteService = favoriteService;
     }
 
-    @Operation(summary = "Get favorites list with real-time quotes")
+    @Operation(summary = "获取自选股列表（含实时行情）")
     @GetMapping("/list")
-    public Map<String, Object> list() {
-        Map<String, Object> result = new HashMap<>();
-        try {
-            List<Map<String, Object>> list = favoriteService.getFavorites(0L);
-            result.put("code", 200);
-            result.put("data", list);
-            result.put("success", true);
-        } catch (Exception e) {
-            result.put("code", 500);
-            result.put("message", e.getMessage());
-            result.put("success", false);
-        }
-        return result;
+    public ApiResponse<List<Map<String, Object>>> list() {
+        return ApiResponse.ok(favoriteService.getFavorites(0L));
     }
 
-    @Operation(summary = "Add stock to favorites")
+    @Operation(summary = "添加自选股")
     @PostMapping("/add")
-    public Map<String, Object> add(@RequestBody Map<String, String> request) {
-        Map<String, Object> result = new HashMap<>();
-        try {
-            String stockCode = request.get("stockCode");
-            if (stockCode == null || stockCode.trim().isEmpty()) {
-                result.put("code", 400);
-                result.put("message", "Stock code is required");
-                result.put("success", false);
-                return result;
-            }
-            boolean success = favoriteService.addFavorite(0L, stockCode.trim());
-            result.put("code", success ? 200 : 500);
-            result.put("success", success);
-            if (!success) result.put("message", "Failed to add favorite");
-        } catch (Exception e) {
-            result.put("code", 500);
-            result.put("message", e.getMessage());
-            result.put("success", false);
+    public ApiResponse<String> add(@RequestBody Map<String, String> request) {
+        String stockCode = request.get("stockCode");
+        if (stockCode == null || stockCode.trim().isEmpty()) {
+            return ApiResponse.fail(400, "股票代码不能为空");
         }
-        return result;
+        favoriteService.addFavorite(0L, stockCode.trim());
+        return ApiResponse.ok("添加成功");
     }
 
-    @Operation(summary = "Remove stock from favorites")
+    @Operation(summary = "删除自选股")
     @DeleteMapping("/remove")
-    public Map<String, Object> remove(@RequestParam String code) {
-        Map<String, Object> result = new HashMap<>();
-        try {
-            boolean success = favoriteService.removeFavorite(0L, code);
-            result.put("code", success ? 200 : 404);
-            result.put("success", success);
-            if (!success) result.put("message", "Favorite not found");
-        } catch (Exception e) {
-            result.put("code", 500);
-            result.put("message", e.getMessage());
-            result.put("success", false);
-        }
-        return result;
+    public ApiResponse<String> remove(@RequestParam String code) {
+        boolean success = favoriteService.removeFavorite(0L, code);
+        if (!success) return ApiResponse.fail(404, "未找到该自选股");
+        return ApiResponse.ok("删除成功");
     }
 }

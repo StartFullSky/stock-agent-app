@@ -8,10 +8,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -27,8 +25,7 @@ public class FavoriteService {
                 .eq(UserFavorite::getUserId, userId)
                 .orderByAsc(UserFavorite::getSortOrder)
         );
-        
-        // Get real-time quotes for each favorite
+
         List<Map<String, Object>> result = new ArrayList<>();
         for (UserFavorite fav : list) {
             Map<String, Object> item = new LinkedHashMap<>();
@@ -36,22 +33,23 @@ public class FavoriteService {
             item.put("stockCode", fav.getStockCode());
             item.put("stockName", fav.getStockName());
             item.put("market", fav.getMarket());
-            
-            // Get real-time quote
+
             try {
                 StockQuoteDTO quote = stockService.getQuote(fav.getStockCode());
                 if (quote != null && !"未知".equals(quote.getStockName())) {
                     item.put("price", quote.getCurrentPrice());
                     item.put("changeRate", quote.getChangeRate());
                     item.put("changeAmount", quote.getChangeAmount());
-                    // Update stock name if empty
                     if (fav.getStockName() == null || fav.getStockName().isEmpty()) {
                         fav.setStockName(quote.getStockName());
                         favoriteMapper.updateById(fav);
                     }
                 }
             } catch (Exception e) {
-                log.warn("Get quote failed for {}: {}", fav.getStockCode(), e.getMessage());
+                log.warn("获取行情失败 {}: {}", fav.getStockCode(), e.getMessage());
+                item.put("price", "--");
+                item.put("changeRate", "--");
+                item.put("changeAmount", "--");
             }
             result.add(item);
         }
@@ -59,35 +57,24 @@ public class FavoriteService {
     }
 
     public boolean addFavorite(Long userId, String stockCode) {
-        // Check if already exists
         Long count = favoriteMapper.selectCount(
             new LambdaQueryWrapper<UserFavorite>()
                 .eq(UserFavorite::getUserId, userId)
                 .eq(UserFavorite::getStockCode, stockCode)
         );
-        if (count > 0) return true; // Already exists
+        if (count > 0) return true;
 
-        // Get stock info
-        String stockName = "";
-        String market = "A";
+        String stockName = ""; String market = "A";
         try {
             StockQuoteDTO quote = stockService.getQuote(stockCode);
-            if (quote != null && !"未知".equals(quote.getStockName())) {
-                stockName = quote.getStockName();
-            }
+            if (quote != null && !"未知".equals(quote.getStockName())) stockName = quote.getStockName();
             if (stockCode.matches("[A-Z]{1,5}")) market = "US";
             else if (stockCode.matches("\\d{5}")) market = "HK";
-        } catch (Exception e) {
-            log.warn("Get stock info failed: {}", e.getMessage());
-        }
+        } catch (Exception e) { log.warn("获取股票信息失败: {}", e.getMessage()); }
 
         UserFavorite fav = new UserFavorite();
-        fav.setUserId(userId);
-        fav.setStockCode(stockCode);
-        fav.setStockName(stockName);
-        fav.setMarket(market);
-        fav.setSortOrder(0);
-        fav.setCreatedAt(LocalDateTime.now());
+        fav.setUserId(userId); fav.setStockCode(stockCode); fav.setStockName(stockName);
+        fav.setMarket(market); fav.setSortOrder(0); fav.setCreatedAt(LocalDateTime.now());
         favoriteMapper.insert(fav);
         return true;
     }

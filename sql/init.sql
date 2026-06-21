@@ -1,5 +1,18 @@
 USE stock_agent;
 
+-- 1. 股票信息表
+CREATE TABLE IF NOT EXISTS stock_info (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    stock_code VARCHAR(20) NOT NULL,
+    stock_name VARCHAR(50) NOT NULL,
+    market VARCHAR(10) NOT NULL,
+    industry VARCHAR(50),
+    status INT DEFAULT 1,
+    INDEX idx_stock_code (stock_code),
+    INDEX idx_market (market)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 2. 聊天历史表
 CREATE TABLE IF NOT EXISTS chat_history (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT NOT NULL DEFAULT 0,
@@ -10,6 +23,71 @@ CREATE TABLE IF NOT EXISTS chat_history (
     INDEX idx_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- 3. 股票行情缓存表
+CREATE TABLE IF NOT EXISTS stock_quote_cache (
+    stock_code VARCHAR(20) PRIMARY KEY,
+    stock_name VARCHAR(50),
+    current_price DECIMAL(10,2),
+    open_price DECIMAL(10,2),
+    high_price DECIMAL(10,2),
+    low_price DECIMAL(10,2),
+    pre_close DECIMAL(10,2),
+    change_amount DECIMAL(10,2),
+    change_rate DECIMAL(10,4),
+    volume BIGINT,
+    amount DECIMAL(18,2)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 4. 股票财务数据表
+CREATE TABLE IF NOT EXISTS stock_financial (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    stock_code VARCHAR(20) NOT NULL,
+    report_date DATE,
+    report_type VARCHAR(20),
+    revenue DECIMAL(18,2),
+    net_profit DECIMAL(18,2),
+    pe_ratio DECIMAL(10,2),
+    pb_ratio DECIMAL(10,2),
+    roe DECIMAL(10,4),
+    debt_ratio DECIMAL(10,4),
+    gross_margin DECIMAL(10,4),
+    INDEX idx_stock_code (stock_code),
+    INDEX idx_report_date (report_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 5. 交易记录表
+CREATE TABLE IF NOT EXISTS stock_trade (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL DEFAULT 0,
+    stock_code VARCHAR(20) NOT NULL,
+    stock_name VARCHAR(50),
+    trade_type INT NOT NULL COMMENT '1=买入, 2=卖出',
+    quantity INT NOT NULL,
+    price DECIMAL(10,2) NOT NULL,
+    amount DECIMAL(14,2),
+    fee DECIMAL(10,2),
+    trade_date DATE,
+    remark VARCHAR(200),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_user_id (user_id),
+    INDEX idx_stock_code (stock_code),
+    INDEX idx_trade_date (trade_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 6. 用户自选股表
+CREATE TABLE IF NOT EXISTS user_favorite (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL DEFAULT 0,
+    stock_code VARCHAR(20) NOT NULL,
+    stock_name VARCHAR(50),
+    market VARCHAR(10),
+    sort_order INT DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_user_id (user_id),
+    UNIQUE KEY uk_user_stock (user_id, stock_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 插入股票基础数据
 INSERT IGNORE INTO stock_info (stock_code, stock_name, market, industry) VALUES
 ('600519','贵州茅台','SH','白酒'),('601318','中国平安','SH','保险'),('600036','招商银行','SH','银行'),
 ('000858','五粮液','SZ','白酒'),('600276','恒瑞医药','SH','医药'),('300750','宁德时代','SZ','电池'),

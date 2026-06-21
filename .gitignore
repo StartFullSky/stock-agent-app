@@ -27,4 +27,7 @@ logs/
 # Env
 .env
 *.env.local
-.env.example
+
+# Dev artifacts
+dev/
+.codex/

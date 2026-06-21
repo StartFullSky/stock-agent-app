@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>📈</text></svg>">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Stock Agent - AI股票投资助手</title>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
@@ -86,7 +87,7 @@
         .modal-body{flex:1;padding:12px;overflow-y:auto}
         #klineChart{width:100%;height:500px}
         @media(max-width:768px){.sidebar{display:none}}
-    </style>
+    .stream-cursor{display:inline-block;width:2px;height:14px;background:var(--accent);margin-left:2px;animation:blink 1s step-end infinite;vertical-align:middle}@keyframes blink{50%{opacity:0}}</style>
 </head>
 <body>
     <div class="sidebar">
@@ -285,22 +286,58 @@ function doSend(){
     appendMsg('user',msg);
     input.value='';input.style.height='auto';
     loading=true;sendBtn.disabled=true;
-    var loadEl=appendLoading();
-    var controller=new AbortController();
-    var timeoutId=setTimeout(function(){controller.abort()},120000);
-    fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg}),signal:controller.signal})
-    .then(function(res){clearTimeout(timeoutId);if(!res.ok)throw new Error('HTTP '+res.status);return res.text()})
-    .then(function(text){
-        loadEl.remove();
-        if(!text){appendMsg('ai','(empty)');return}
-        var data=JSON.parse(text);
-        if(data.success){appendMsg('ai',data.data);checkForKline(msg,data.data)}
-        else{appendMsg('ai','Error: '+(data.message||'failed'))}
+
+    var aiDiv=document.createElement('div');
+    aiDiv.className='msg ai';
+    aiDiv.innerHTML='<div class="msg-avatar">&#129302;</div><div class="msg-bubble"><span class="stream-cursor"></span></div>';
+    chatArea.appendChild(aiDiv);
+    scrollToBottom();
+    var bubble=aiDiv.querySelector('.msg-bubble');
+    var fullText='';
+
+    fetch('/api/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})})
+    .then(function(res){
+        if(!res.ok)throw new Error('HTTP '+res.status);
+        var reader=res.body.getReader();
+        var decoder=new TextDecoder();
+        var buffer='';
+        function read(){
+            return reader.read().then(function(result){
+                if(result.done){
+                    finalizeStream(bubble,fullText,msg);
+                    return;
+                }
+                buffer+=decoder.decode(result.value,{stream:true});
+                var lines=buffer.split('\n');
+                buffer=lines.pop();
+                for(var i=0;i<lines.length;i++){
+                    var line=lines[i].trim();
+                    if(line.indexOf('data:')===0){
+                        var data=line.substring(5).trim();
+                        if(data){
+                            fullText+=data;
+                            renderStreamChunk(bubble,fullText);
+                        }
+                    }
+                }
+                return read();
+            });
+        }
+        return read();
     }).catch(function(e){
-        clearTimeout(timeoutId);loadEl.remove();
-        if(e.name==='AbortError'){appendMsg('ai','Timeout - please retry')}
-        else{appendMsg('ai','Error: '+e.message)}
+        if(e.name==='AbortError'){bubble.innerHTML='<span style="color:var(--text2)">Timeout - please retry</span>'}
+        else{bubble.innerHTML='<span style="color:var(--red)">Error: '+escapeHtml(e.message)+'</span>'}
     }).finally(function(){loading=false;sendBtn.disabled=false;input.focus()})
+}
+function renderStreamChunk(bubble,text){
+    var cursor='<span class="stream-cursor"></span>';
+    bubble.innerHTML=marked.parse(text)+cursor;
+    scrollToBottom();
+}
+function finalizeStream(bubble,text,msg){
+    bubble.innerHTML=marked.parse(text);
+    scrollToBottom();
+    if(text)checkForKline(msg,text);
 }
 
 function appendMsg(role,content,scroll){

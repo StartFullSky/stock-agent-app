@@ -10,6 +10,7 @@ import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -36,7 +37,10 @@ public class AgentTools {
                 sb.append(String.format("%d. %s\n   来源: %s\n\n", i + 1, r.get("title"), r.get("source")));
             }
             return sb.toString();
-        } catch (Exception e) { return "搜索失败：" + e.getMessage(); }
+        } catch (Exception e) {
+            log.error("Web搜索失败", e);
+            return "搜索暂时不可用，请稍后重试";
+        }
     }
 
     @Tool("分析用户的交易行为，包括胜率、频率、盈亏诊断")
@@ -54,7 +58,10 @@ public class AgentTools {
                 for (String d : review.getDiagnoses()) sb.append("  ").append(d).append("\n");
             }
             return sb.toString();
-        } catch (Exception e) { return "复盘失败：" + e.getMessage(); }
+        } catch (Exception e) {
+            log.error("交易复盘失败", e);
+            return "复盘分析暂时不可用，请稍后重试";
+        }
     }
 
     @Tool("回测双均线策略，输入股票代码和均线周期")
@@ -66,8 +73,11 @@ public class AgentTools {
             int sp = shortPeriod != null ? Integer.parseInt(shortPeriod) : 5;
             int lp = longPeriod != null ? Integer.parseInt(longPeriod) : 20;
             BacktestResultDTO r = backtestService.backtestMovingAverage(stockCode, sp, lp, start, end, BigDecimal.valueOf(100000));
-            return String.format("【回测结果】\n策略: %s\n收益率: %s%%\n最大回撤: %s%%\n交易次数: %s\n胜率: %s%%",
+            return String.format("【回测结果】\n策略: %s\n收益率: %s%%\n最大回撤: %s%%\n交易次数: %s\n胜率: %s%%\n\n⚠️ 以上回测结果基于历史数据，不代表未来收益。",
                 r.getStrategyName(), r.getTotalReturn(), r.getMaxDrawdown(), r.getTradeCount(), r.getWinRate());
-        } catch (Exception e) { return "回测失败：" + e.getMessage(); }
+        } catch (Exception e) {
+            log.error("回测失败", e);
+            return "回测暂时不可用: " + e.getMessage();
+        }
     }
 }

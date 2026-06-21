@@ -1,0 +1,37 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=MySQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+mybatis-plus:
+  mapper-locations: classpath:mapper/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: assign_id
+
+ai:
+  api-key: test-key
+  model: test-model
+  base-url: http://localhost
+
+cache:
+  quote-ttl: 10
+  kline-ttl: 3600
+  search-ttl: 600
+
+langchain4j:
+  open-ai:
+    chat-model:
+      enabled: false
+
+logging:
+  level:
+    com.stockagent: debug

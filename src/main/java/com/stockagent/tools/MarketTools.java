@@ -2,12 +2,12 @@ package com.stockagent.tools;
 
 import com.stockagent.service.StockService;
 import com.stockagent.dto.StockQuoteDTO;
-import com.stockagent.dto.StockSearchDTO;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+
 import java.util.List;
 import java.util.Map;
 
@@ -29,7 +29,10 @@ public class MarketTools {
                 market, quote.getStockName(), quote.getStockCode(), quote.getCurrentPrice(),
                 quote.getChangeAmount(), quote.getChangeRate(), quote.getOpenPrice(),
                 quote.getHighPrice(), quote.getLowPrice(), quote.getVolume());
-        } catch (Exception e) { return "查询行情失败：" + e.getMessage(); }
+        } catch (Exception e) {
+            log.error("查询行情失败", e);
+            return "查询行情暂时不可用，请稍后重试";
+        }
     }
 
     @Tool("查询大盘指数行情。可查询：上证指数、深证成指、创业板指、沪深300、上证50、中证500、纳斯达克、道琼斯、标普500、恒生指数等")
@@ -41,7 +44,10 @@ public class MarketTools {
             return String.format("【%s】\n当前点位: %s\n涨跌: %s\n涨跌幅: %s%%\n今日最高: %s\n今日最低: %s",
                 indexName, quote.getCurrentPrice(), quote.getChangeAmount(), quote.getChangeRate(),
                 quote.getHighPrice(), quote.getLowPrice());
-        } catch (Exception e) { return "查询指数失败：" + e.getMessage(); }
+        } catch (Exception e) {
+            log.error("查询指数失败", e);
+            return "查询指数暂时不可用，请稍后重试";
+        }
     }
 
     @Tool("获取所有主要指数行情概览，包括上证指数、深证成指、创业板指、沪深300等")
@@ -53,16 +59,20 @@ public class MarketTools {
             StringBuilder sb = new StringBuilder("【主要指数行情】\n\n");
             for (Map<String, Object> idx : indices) {
                 Object rate = idx.get("changeRate");
-                String arrow = "🔴";
+                String arrow = "➡️";
                 if (rate != null) {
                     try {
-                        if (Double.parseDouble(rate.toString()) > 0) arrow = "🟢";
+                        if (Double.parseDouble(rate.toString()) > 0) arrow = "🔴";
+                        else if (Double.parseDouble(rate.toString()) < 0) arrow = "🟢";
                     } catch (Exception ignored) {}
                 }
                 sb.append(String.format("%s %s: %s  涨跌幅: %s%%\n", arrow, idx.get("name"), idx.get("price"), rate));
             }
             return sb.toString();
-        } catch (Exception e) { return "获取指数失败：" + e.getMessage(); }
+        } catch (Exception e) {
+            log.error("获取指数失败", e);
+            return "获取指数数据暂时不可用，请稍后重试";
+        }
     }
 
     @Tool("查询历史K线数据。输入股票代码、开始日期、结束日期，返回每日开盘价、收盘价、最高价、最低价")
@@ -73,7 +83,7 @@ public class MarketTools {
             if (klines.isEmpty()) return "未找到K线数据";
             StringBuilder sb = new StringBuilder();
             sb.append(String.format("【%s 历史K线】\n\n", stockCode));
-            sb.append("日期       | 开盘    | 收盘    | 最高    | 最低\n");
+            sb.append("日期       | 开盘   | 收盘    | 最高   | 最低\n");
             sb.append("-----------|---------|---------|---------|--------\n");
             int show = Math.min(klines.size(), 20);
             for (int i = klines.size() - show; i < klines.size(); i++) {
@@ -81,9 +91,12 @@ public class MarketTools {
                 sb.append(String.format("%s | %-7s | %-7s | %-7s | %s\n",
                     k.get("date"), k.get("open"), k.get("close"), k.get("high"), k.get("low")));
             }
-            if (klines.size() > show) sb.append(String.format("\n... 共 %d 条数据，仅显示最近 %d 条", klines.size(), show));
+            if (klines.size() > show) sb.append(String.format("\n... 共%d 条数据，仅显示最近%d 条", klines.size(), show));
             return sb.toString();
-        } catch (Exception e) { return "获取K线失败：" + e.getMessage(); }
+        } catch (Exception e) {
+            log.error("获取K线失败", e);
+            return "获取K线数据暂时不可用，请稍后重试";
+        }
     }
 
     @Tool("搜索全球股票，输入关键词可搜A股（中文名/代码）、美股（英文代码如AAPL）、港股（数字代码如00700）、指数（如上证指数）")
@@ -98,7 +111,10 @@ public class MarketTools {
                 sb.append(String.format("%d. %s - %s [%s]\n", i + 1, r.get("name"), r.get("code"), r.get("market")));
             }
             return sb.toString();
-        } catch (Exception e) { return "搜索失败：" + e.getMessage(); }
+        } catch (Exception e) {
+            log.error("搜索股票失败", e);
+            return "搜索暂时不可用，请稍后重试";
+        }
     }
 
     private String detectMarket(String code) {

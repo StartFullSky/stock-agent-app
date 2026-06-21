@@ -1,8 +1,10 @@
 package com.stockagent.controller;
 
+import com.stockagent.common.ApiResponse;
 import com.stockagent.entity.ChatHistory;
 import com.stockagent.mapper.ChatHistoryMapper;
 import com.stockagent.service.AgentService;
+import dev.langchain4j.service.TokenStream;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.MediaType;
@@ -30,115 +32,120 @@ public class ChatController {
 
     @Operation(summary = "发送消息（同步）")
     @PostMapping
-    public Map<String, Object> chat(@RequestBody Map<String, String> request) {
-        Map<String, Object> result = new HashMap<>();
-        try {
-            String message = request.get("message");
-            log.info("收到消息: {}", message);
-            saveChat(0L, "user", message);
-            String reply = agentService.chat(0L, message);
-            saveChat(0L, "assistant", reply);
-            result.put("code", 200); result.put("data", reply); result.put("success", true);
-        } catch (Exception e) {
-            log.error("AI对话失败", e);
-            result.put("code", 500); result.put("message", "AI对话失败: " + e.getMessage()); result.put("success", false);
+    public ApiResponse<String> chat(@RequestBody Map<String, String> request) {
+        String message = request.get("message");
+        if (message == null || message.trim().isEmpty()) {
+            return ApiResponse.fail(400, "消息不能为空");
         }
-        return result;
+        log.info("收到消息: {}", message);
+        saveChat(0L, "user", message);
+        String reply = agentService.chat(0L, message);
+        saveChat(0L, "assistant", reply);
+        return ApiResponse.ok(reply);
     }
 
-    @Operation(summary = "流式对话（SSE）")
+    /**
+     * 真流式对话（SSE）
+     * 使用 LangChain4j TokenStream 实现 token 级实时推送。
+     * 当 AI 需要调用工具（行情查询、搜索等）时，连接保持，工具执行完毕后继续流式输出最终回复。
+     */
+    @Operation(summary = "流式对话（SSE真流式）")
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chatStream(@RequestBody Map<String, String> request) {
-        SseEmitter emitter = new SseEmitter(120000L);
+        SseEmitter emitter = new SseEmitter(180000L);
         String message = request.get("message");
+
+        if (message == null || message.trim().isEmpty()) {
+            try { emitter.send(SseEmitter.event().name("error").data("消息不能为空")); }
+            catch (Exception ignored) {}
+            emitter.complete();
+            return emitter;
+        }
+
         log.info("流式消息: {}", message);
+        saveChat(0L, "user", message);
 
-        executor.submit(() -> {
-            try {
-                saveChat(0L, "user", message);
-                // 发送开始事件
-                emitter.send(SseEmitter.event().name("start").data(""));
+        // 累积完整回复，用于保存聊天记录
+        StringBuilder fullReply = new StringBuilder();
 
-                String reply = agentService.chat(0L, message);
-                saveChat(0L, "assistant", reply);
+        TokenStream tokenStream = agentService.chatStream(0L, message);
 
-                // 模拟流式：逐段发送
-                String[] parts = reply.split("(?<=\\n)");
-                StringBuilder sent = new StringBuilder();
-                for (String part : parts) {
-                    sent.append(part);
-                    emitter.send(SseEmitter.event().name("message").data(part));
-                    Thread.sleep(30);
-                }
-
-                emitter.send(SseEmitter.event().name("done").data(""));
-                emitter.complete();
-            } catch (Exception e) {
-                log.error("流式对话失败", e);
+        tokenStream
+            .onNext(token -> {
                 try {
-                    emitter.send(SseEmitter.event().name("error").data("对话失败: " + e.getMessage()));
+                    fullReply.append(token);
+                    emitter.send(SseEmitter.event().name("message").data(token));
+                } catch (Exception e) {
+                    log.warn("发送SSE消息失败: {}", e.getMessage());
+                }
+            })
+            .onComplete(response -> {
+                try {
+                    String aiText = response.content().text();
+                    String replyToSave = (aiText != null && !aiText.isEmpty()) ? aiText : fullReply.toString();
+                    saveChat(0L, "assistant", replyToSave);
+                    emitter.send(SseEmitter.event().name("done").data(""));
+                    emitter.complete();
+                } catch (Exception e) {
+                    log.error("完成SSE流失败", e);
+                    emitter.complete();
+                }
+            })
+            .onError(error -> {
+                log.error("流式对话异常", error);
+                try {
+                    emitter.send(SseEmitter.event().name("error").data("对话失败: " + error.getMessage()));
                 } catch (Exception ignored) {}
-                emitter.completeWithError(e);
-            }
-        });
+                emitter.completeWithError(error);
+            })
+            .start();
 
-        emitter.onTimeout(emitter::complete);
-        emitter.onError(t -> {});
+        emitter.onTimeout(() -> {
+            log.warn("SSE流超时");
+            emitter.complete();
+        });
+        emitter.onError(t -> log.warn("SSE连接错误: {}", t.getMessage()));
+
         return emitter;
     }
 
     @Operation(summary = "测试对话（GET）")
     @GetMapping("/test")
-    public Map<String, Object> test(@RequestParam(defaultValue = "你好") String msg) {
-        Map<String, Object> r = new HashMap<>();
-        try {
-            String reply = agentService.chat(0L, msg);
-            r.put("code", 200); r.put("data", reply); r.put("success", true);
-        } catch (Exception e) {
-            r.put("code", 500); r.put("message", e.getMessage()); r.put("success", false);
-        }
-        return r;
+    public ApiResponse<String> test(@RequestParam(defaultValue = "你好") String msg) {
+        return ApiResponse.ok(agentService.chat(0L, msg));
     }
 
     @Operation(summary = "获取历史对话")
     @GetMapping("/history")
-    public Map<String, Object> history(@RequestParam(defaultValue = "50") int limit) {
-        Map<String, Object> result = new HashMap<>();
-        try {
-            List<ChatHistory> list = chatHistoryMapper.selectList(
-                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatHistory>()
-                    .eq(ChatHistory::getUserId, 0L)
-                    .orderByDesc(ChatHistory::getCreatedAt)
-                    .last("LIMIT " + limit)
-            );
-            Collections.reverse(list);
-            result.put("code", 200); result.put("data", list); result.put("success", true);
-        } catch (Exception e) {
-            result.put("code", 500); result.put("message", e.getMessage()); result.put("success", false);
-        }
-        return result;
+    public ApiResponse<List<ChatHistory>> history(@RequestParam(defaultValue = "50") int limit) {
+        List<ChatHistory> list = chatHistoryMapper.selectList(
+            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatHistory>()
+                .eq(ChatHistory::getUserId, 0L)
+                .orderByDesc(ChatHistory::getCreatedAt)
+                .last("LIMIT " + Math.min(limit, 200))
+        );
+        Collections.reverse(list);
+        return ApiResponse.ok(list);
     }
 
     @Operation(summary = "清空历史对话")
     @DeleteMapping("/history")
-    public Map<String, Object> clearHistory() {
-        Map<String, Object> result = new HashMap<>();
-        try {
-            chatHistoryMapper.delete(
-                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatHistory>()
-                    .eq(ChatHistory::getUserId, 0L)
-            );
-            result.put("code", 200); result.put("data", "已清空"); result.put("success", true);
-        } catch (Exception e) {
-            result.put("code", 500); result.put("message", e.getMessage()); result.put("success", false);
-        }
-        return result;
+    public ApiResponse<String> clearHistory() {
+        chatHistoryMapper.delete(
+            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatHistory>()
+                .eq(ChatHistory::getUserId, 0L)
+        );
+        return ApiResponse.ok("已清空");
     }
 
     private void saveChat(Long userId, String role, String content) {
         try {
             ChatHistory msg = new ChatHistory();
-            msg.setUserId(userId); msg.setRole(role); msg.setContent(content); msg.setCreatedAt(LocalDateTime.now());
+            msg.setUserId(userId);
+            msg.setSessionId("default");
+            msg.setRole(role);
+            msg.setContent(content);
+            msg.setCreatedAt(LocalDateTime.now());
             chatHistoryMapper.insert(msg);
         } catch (Exception e) { log.warn("保存对话失败: {}", e.getMessage()); }
     }

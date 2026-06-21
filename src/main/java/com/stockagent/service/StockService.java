@@ -6,19 +6,20 @@ import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.stockagent.common.BusinessException;
 import com.stockagent.dto.StockQuoteDTO;
 import com.stockagent.dto.StockSearchDTO;
 import com.stockagent.entity.StockInfo;
-import com.stockagent.entity.StockQuoteCache;
 import com.stockagent.mapper.StockInfoMapper;
-import com.stockagent.mapper.StockQuoteCacheMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -27,11 +28,23 @@ import java.util.stream.Collectors;
 public class StockService {
 
     private final StockInfoMapper stockInfoMapper;
-    private final StockQuoteCacheMapper stockQuoteCacheMapper;
     private final StringRedisTemplate redisTemplate;
+
+    @Value("${cache.quote-ttl:10}")
+    private long quoteTtl;
+
+    @Value("${cache.kline-ttl:3600}")
+    private long klineTtl;
+
+    @Value("${cache.search-ttl:600}")
+    private long searchTtl;
 
     private static final String TENCENT_API_URL = "http://qt.gtimg.cn/q=";
     private static final String SINA_KLINE_URL = "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData";
+
+    private static final String CACHE_PREFIX_QUOTE = "stock:quote:";
+    private static final String CACHE_PREFIX_KLINE = "stock:kline:";
+    private static final String CACHE_PREFIX_SEARCH = "stock:search:";
 
     private static final Map<String, String> INDEX_MAP = new LinkedHashMap<>();
     static {
@@ -45,23 +58,54 @@ public class StockService {
 
     public List<StockSearchDTO> searchStock(String keyword) {
         if (StrUtil.isBlank(keyword)) return new ArrayList<>();
+
+        String cacheKey = CACHE_PREFIX_SEARCH + keyword;
+        String cached = redisTemplate.opsForValue().get(cacheKey);
+        if (cached != null) {
+            return JSONUtil.toList(cached, StockSearchDTO.class);
+        }
+
         LambdaQueryWrapper<StockInfo> wrapper = new LambdaQueryWrapper<>();
         wrapper.and(w -> w.like(StockInfo::getStockCode, keyword).or().like(StockInfo::getStockName, keyword))
                .eq(StockInfo::getStatus, 1).last("LIMIT 20");
-        return stockInfoMapper.selectList(wrapper).stream().map(this::convertToSearchDTO).collect(Collectors.toList());
+        List<StockSearchDTO> result = stockInfoMapper.selectList(wrapper).stream()
+                .map(this::convertToSearchDTO).collect(Collectors.toList());
+
+        if (!result.isEmpty()) {
+            redisTemplate.opsForValue().set(cacheKey, JSONUtil.toJsonStr(result), searchTtl, TimeUnit.SECONDS);
+        }
+        return result;
     }
 
     public StockQuoteDTO getQuote(String stockCode) {
         String indexCode = INDEX_MAP.get(stockCode);
         if (indexCode != null) stockCode = indexCode;
+
+        String cacheKey = CACHE_PREFIX_QUOTE + stockCode;
+        String cached = redisTemplate.opsForValue().get(cacheKey);
+        if (cached != null) {
+            return JSONUtil.toBean(cached, StockQuoteDTO.class);
+        }
+
         try {
             StockQuoteDTO dto = fetchQuote(stockCode);
-            if (dto != null) return dto;
-        } catch (Exception e) { log.error("获取行情失败: {}", e.getMessage()); }
+            if (dto != null && !"未知".equals(dto.getStockName())) {
+                redisTemplate.opsForValue().set(cacheKey, JSONUtil.toJsonStr(dto), quoteTtl, TimeUnit.SECONDS);
+                return dto;
+            }
+        } catch (Exception e) {
+            log.error("获取行情失败: {}", e.getMessage());
+        }
         return createEmptyQuote(stockCode);
     }
 
     public List<Map<String, Object>> getMainIndices() {
+        String cacheKey = CACHE_PREFIX_QUOTE + "indices";
+        String cached = redisTemplate.opsForValue().get(cacheKey);
+        if (cached != null) {
+            return parseMapList(cached);
+        }
+
         List<Map<String, Object>> results = new ArrayList<>();
         for (Map.Entry<String, String> entry : INDEX_MAP.entrySet()) {
             try {
@@ -77,17 +121,25 @@ public class StockService {
                 }
             } catch (Exception ignored) {}
         }
+
+        if (!results.isEmpty()) {
+            redisTemplate.opsForValue().set(cacheKey, JSONUtil.toJsonStr(results), quoteTtl, TimeUnit.SECONDS);
+        }
         return results;
     }
 
-    // ========== K线数据（修复：不过滤日期，返回最近N天） ==========
     public List<Map<String, Object>> getKlineData(String stockCode, String startDate, String endDate, int limit) {
+        String cacheKey = CACHE_PREFIX_KLINE + stockCode + ":" + startDate + ":" + endDate + ":" + limit;
+        String cached = redisTemplate.opsForValue().get(cacheKey);
+        if (cached != null) {
+            return parseMapList(cached);
+        }
+
         List<Map<String, Object>> results = new ArrayList<>();
         try {
             String sinaCode = toTencentCode(stockCode);
             if (sinaCode.startsWith("us") || sinaCode.startsWith("hk")) return results;
 
-            // 请求足够多的数据以覆盖日期范围
             int dataLen = Math.max(limit, 365);
             String url = SINA_KLINE_URL + "?symbol=" + sinaCode + "&scale=240&ma=no&datalen=" + dataLen;
             log.info("请求K线: {}", url);
@@ -97,7 +149,6 @@ public class StockService {
             JSONArray arr = JSONUtil.parseArray(response);
             if (arr == null || arr.isEmpty()) { log.warn("K线JSON解析为空"); return results; }
 
-            // 先收集所有数据
             List<Map<String, Object>> allData = new ArrayList<>();
             for (int i = 0; i < arr.size(); i++) {
                 JSONObject obj = arr.getJSONObject(i);
@@ -111,42 +162,40 @@ public class StockService {
                 allData.add(kline);
             }
 
-            log.info("K线原始数据: {} 条", allData.size());
-
-            // 如果指定了日期范围，过滤；否则返回最近的数据
-            if (StrUtil.isNotBlank(startDate) && StrUtil.isNotBlank(endDate)) {
-                for (Map<String, Object> kline : allData) {
-                    String day = (String) kline.get("date");
-                    if (day.compareTo(startDate) >= 0 && day.compareTo(endDate) <= 0) {
-                        results.add(kline);
-                    }
-                }
-                // 如果过滤后为空，返回全部数据（让AI看到实际数据）
-                if (results.isEmpty()) {
-                    log.info("日期范围内无数据，返回最近{}条", Math.min(allData.size(), limit));
-                    results = allData.subList(Math.max(0, allData.size() - limit), allData.size());
-                }
-            } else {
-                // 没指定日期，返回最近的数据
-                results = allData.subList(Math.max(0, allData.size() - limit), allData.size());
+            // 按日期过滤
+            List<Map<String, Object>> filtered = allData;
+            if (StrUtil.isNotBlank(startDate)) {
+                String finalStart = startDate;
+                filtered = filtered.stream()
+                    .filter(k -> k.get("date").toString().compareTo(finalStart) >= 0)
+                    .collect(Collectors.toList());
+            }
+            if (StrUtil.isNotBlank(endDate)) {
+                String finalEnd = endDate;
+                filtered = filtered.stream()
+                    .filter(k -> k.get("date").toString().compareTo(finalEnd) <= 0)
+                    .collect(Collectors.toList());
             }
 
-            log.info("获取K线成功: {} 条数据", results.size());
+            // 取最近N条
+            if (filtered.size() > limit) {
+                results = new ArrayList<>(filtered.subList(filtered.size() - limit, filtered.size()));
+            } else {
+                results = new ArrayList<>(filtered);
+            }
+
+            if (!results.isEmpty()) {
+                redisTemplate.opsForValue().set(cacheKey, JSONUtil.toJsonStr(results), klineTtl, TimeUnit.SECONDS);
+            }
         } catch (Exception e) {
-            log.error("获取K线数据失败: {}", e.getMessage(), e);
+            log.error("获取K线数据失败", e);
+            throw new BusinessException(500, "获取K线数据失败: " + e.getMessage());
         }
         return results;
     }
 
     public List<Map<String, String>> searchGlobalStock(String keyword) {
         List<Map<String, String>> results = new ArrayList<>();
-        for (Map.Entry<String, String> entry : INDEX_MAP.entrySet()) {
-            if (entry.getKey().contains(keyword) || keyword.contains(entry.getKey())) {
-                Map<String, String> item = new HashMap<>();
-                item.put("code", entry.getValue()); item.put("name", entry.getKey()); item.put("market", "指数");
-                results.add(item);
-            }
-        }
         List<StockSearchDTO> aStocks = searchStock(keyword);
         for (StockSearchDTO s : aStocks) {
             Map<String, String> item = new HashMap<>();
@@ -165,7 +214,7 @@ public class StockService {
                         results.add(item);
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) { log.warn("美股搜索失败: {}", e.getMessage()); }
         }
         if (keyword.matches("\\d+")) {
             String hkCode = "hk" + String.format("%05d", Integer.parseInt(keyword));
@@ -179,9 +228,24 @@ public class StockService {
                         results.add(item);
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) { log.warn("港股搜索失败: {}", e.getMessage()); }
         }
         return results;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> parseMapList(String json) {
+        try {
+            List<JSONObject> list = JSONUtil.toList(json, JSONObject.class);
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (JSONObject obj : list) {
+                result.add(new LinkedHashMap<>(obj));
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("缓存解析失败: {}", e.getMessage());
+            return new ArrayList<>();
+        }
     }
 
     private StockQuoteDTO fetchQuote(String stockCode) {
