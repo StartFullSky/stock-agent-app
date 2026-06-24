@@ -6,6 +6,11 @@ import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import lombok.extern.slf4j.Slf4j;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.net.URLEncoder;
@@ -14,8 +19,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Web搜索服务 - 免费多源搜索
@@ -25,11 +28,8 @@ import java.util.regex.Pattern;
 @Slf4j
 public class WebSearchService {
 
-    private static final int DEFAULT_TIMEOUT = 10000;
-
-    /** 用于从HTML中提取链接的正则，比纯字符串分割更健壮 */
-    private static final Pattern HREF_PATTERN = Pattern.compile("href=\"(https?://[^\"]+)\"");
-    private static final Pattern TITLE_PATTERN = Pattern.compile("<a[^>]*>(.*?)</a>", Pattern.DOTALL);
+    @Value("${http.timeout.search:10000}")
+    private int httpTimeout = 10000;
 
     public List<Map<String, String>> search(String query, int maxResults) {
         if (StrUtil.isBlank(query)) return new ArrayList<>();
@@ -48,30 +48,32 @@ public class WebSearchService {
         try {
             String encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8);
             String url = "https://search.sina.com.cn/news?q=" + encodedQuery + "&c=news&sort=time&num=" + maxResults;
-            String html = HttpUtil.get(url, DEFAULT_TIMEOUT);
+            String html = HttpUtil.get(url, httpTimeout);
             if (StrUtil.isBlank(html)) return results;
 
-            // 使用正则提取<h2>块中的链接和标题，比字符串split更健壮
-            String[] sections = html.split("<h2>");
-            for (int i = 1; i < sections.length && results.size() < maxResults; i++) {
-                String section = sections[i];
+            // 使用Jsoup解析HTML，比正则更健壮
+            Document doc = Jsoup.parse(html);
+            Elements h2Elements = doc.select("h2");
+            for (Element h2 : h2Elements) {
+                if (results.size() >= maxResults) break;
                 try {
-                    Matcher hrefMatcher = HREF_PATTERN.matcher(section);
-                    Matcher titleMatcher = TITLE_PATTERN.matcher(section);
-                    if (hrefMatcher.find() && titleMatcher.find()) {
-                        String link = hrefMatcher.group(1);
-                        String title = titleMatcher.group(1).replaceAll("<[^>]+>", "").trim();
-                        if (StrUtil.isNotBlank(title) && title.length() > 5 && StrUtil.isNotBlank(link)) {
+                    Element link = h2.selectFirst("a[href]");
+                    if (link != null) {
+                        String href = link.attr("abs:href");
+                        String title = link.text().trim();
+                        if (StrUtil.isNotBlank(title) && title.length() > 5 && StrUtil.isNotBlank(href)) {
                             Map<String, String> item = new HashMap<>();
-                            item.put("title", title); item.put("url", link); item.put("source", "新浪财经");
+                            item.put("title", title);
+                            item.put("url", href);
+                            item.put("source", "新浪财经");
                             results.add(item);
                         }
                     }
                 } catch (Exception e) {
-                    log.debug("解析新浪搜索结果条目失败: {}", e.getMessage());
+                    log.debug("解析新浪搜索结果条目失败", e);
                 }
             }
-        } catch (Exception e) { log.warn("新浪搜索失败: {}", e.getMessage()); }
+        } catch (Exception e) { log.warn("新浪搜索失败", e); }
         return results;
     }
 
@@ -80,7 +82,7 @@ public class WebSearchService {
         try {
             String encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8);
             String url = "https://search-api-web.eastmoney.com/search/jsonp?cb=&type=8050&pageindex=1&pagesize=" + maxResults + "&keyword=" + encodedQuery;
-            String response = HttpUtil.get(url, DEFAULT_TIMEOUT);
+            String response = HttpUtil.get(url, httpTimeout);
             if (StrUtil.isBlank(response)) return results;
 
             String json = response;
@@ -102,7 +104,7 @@ public class WebSearchService {
                 r.put("date", item.getStr("date", ""));
                 if (StrUtil.isNotBlank(r.get("title"))) results.add(r);
             }
-        } catch (Exception e) { log.warn("东方财富搜索失败: {}", e.getMessage()); }
+        } catch (Exception e) { log.warn("东方财富搜索失败", e); }
         return results;
     }
 }

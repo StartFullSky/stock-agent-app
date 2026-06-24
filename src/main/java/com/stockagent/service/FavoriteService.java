@@ -46,7 +46,7 @@ public class FavoriteService {
                     }
                 }
             } catch (Exception e) {
-                log.warn("获取行情失败 {}: {}", fav.getStockCode(), e.getMessage());
+                log.warn("获取行情失败 {}", fav.getStockCode(), e);
                 item.put("price", "--");
                 item.put("changeRate", "--");
                 item.put("changeAmount", "--");
@@ -70,7 +70,7 @@ public class FavoriteService {
             if (quote != null && !"未知".equals(quote.getStockName())) stockName = quote.getStockName();
             if (stockCode.matches("[A-Z]{1,5}")) market = "US";
             else if (stockCode.matches("\\d{5}")) market = "HK";
-        } catch (Exception e) { log.warn("获取股票信息失败: {}", e.getMessage()); }
+        } catch (Exception e) { log.warn("获取股票信息失败", e); }
 
         UserFavorite fav = new UserFavorite();
         fav.setUserId(userId); fav.setStockCode(stockCode); fav.setStockName(stockName);

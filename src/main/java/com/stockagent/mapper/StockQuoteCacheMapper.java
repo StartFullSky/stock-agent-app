@@ -1,12 +1,8 @@
 package com.stockagent.mapper;
 
-import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.stockagent.entity.StockQuoteCache;
-import org.apache.ibatis.annotations.Mapper;
-
 /**
- * 行情缓存Mapper
+ * @deprecated 此Mapper未被使用，已移除。如需数据库级缓存请重新创建。
  */
-@Mapper
-public interface StockQuoteCacheMapper extends BaseMapper<StockQuoteCache> {
+@Deprecated
+public interface StockQuoteCacheMapper {
 }

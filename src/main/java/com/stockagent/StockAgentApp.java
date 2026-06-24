@@ -1,5 +1,6 @@
 package com.stockagent;
 
+import lombok.extern.slf4j.Slf4j;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -9,6 +10,7 @@ import java.io.FileReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+@Slf4j
 @SpringBootApplication
 @MapperScan("com.stockagent.mapper")
 public class StockAgentApp {
@@ -18,14 +20,12 @@ public class StockAgentApp {
         loadEnv();
 
         SpringApplication.run(StockAgentApp.class, args);
-        System.out.println();
-        System.out.println("==========================================");
-        System.out.println("     Stock Agent 启动成功!");
-        System.out.println("==========================================");
-        System.out.println("  前端页面: http://localhost:${server.port:9090}");
-        System.out.println("  API文档:  http://localhost:${server.port:9090}/doc.html");
-        System.out.println("==========================================");
-        System.out.println();
+        log.info("==========================================");
+        log.info("     Stock Agent 启动成功!");
+        log.info("==========================================");
+        log.info("  前端页面: http://localhost:{}", System.getProperty("server.port", "9090"));
+        log.info("  API文档:  http://localhost:{}/doc.html", System.getProperty("server.port", "9090"));
+        log.info("==========================================");
     }
 
     private static void loadEnv() {
@@ -60,9 +60,9 @@ public class StockAgentApp {
                 }
             }
             // 仅记录加载数量，不输出具体key/value，防止敏感信息泄露到日志
-            System.out.println("[ENV] 已加载 .env 文件（" + count + " 个变量）");
+            log.info("[ENV] 已加载 .env 文件（{} 个变量）", count);
         } catch (Exception e) {
-            System.out.println("[ENV] .env 文件加载失败: " + e.getMessage());
+            log.warn("[ENV] .env 文件加载失败: {}", e.getMessage());
         }
     }
 }

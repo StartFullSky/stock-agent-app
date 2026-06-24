@@ -6,6 +6,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 
@@ -15,13 +19,18 @@ import static org.junit.jupiter.api.Assertions.*;
  * BacktestService 单元测试
  * 测试双均线策略回测逻辑和参数校验
  */
+@ExtendWith(MockitoExtension.class)
 class BacktestServiceTest {
+
+    @Mock
+    private StockService stockService;
 
     private BacktestService backtestService;
 
     @BeforeEach
     void setUp() {
-        backtestService = new BacktestService();
+        backtestService = new BacktestService(stockService);
+        ReflectionTestUtils.setField(backtestService, "httpTimeout", 10000);
     }
 
     @Nested

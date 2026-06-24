@@ -18,14 +18,20 @@ import java.util.*;
  * 支持：均线策略、买入持有策略
  * 数据源：腾讯行情API（免费）
  */
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+
 @Service
 @Slf4j
+@RequiredArgsConstructor
 public class BacktestService {
 
     private static final String TENCENT_KLINE_URL = "http://web.ifzq.gtimg.cn/appstock/app/fqkline/get";
 
-    /** HTTP请求超时（毫秒） */
-    private static final int HTTP_TIMEOUT = 10000;
+    @Value("${http.timeout.kline:10000}")
+    private int httpTimeout;
+
+    private final StockService stockService;
 
     public BacktestResultDTO backtestMovingAverage(String stockCode, int shortPeriod, int longPeriod,
                                                    String startDate, String endDate, BigDecimal initialCapital) {
@@ -135,7 +141,12 @@ public class BacktestService {
 
         if (shares > 0) {
             BigDecimal lastPrice = getClosePrice(klines.get(klines.size() - 1));
+            // 未平仓头寸按最后价格强制平仓，计入交易次数和胜负
+            if (buyPrice != null && lastPrice.compareTo(buyPrice) > 0) {
+                winCount++;
+            }
             cash = cash.add(lastPrice.multiply(BigDecimal.valueOf(shares)));
+            tradeCount++;
         }
 
         result.setFinalCapital(cash);
@@ -156,9 +167,9 @@ public class BacktestService {
         List<Map<String, Object>> klines = new ArrayList<>();
         try {
             // 使用正确的市场代码判断，复用StockService的市场检测逻辑
-            String code = toTencentCode(stockCode);
+            String code = stockService.toTencentCode(stockCode);
             String url = TENCENT_KLINE_URL + "?param=" + code + ",day," + startDate + "," + endDate + ",500,qfq";
-            String response = HttpUtil.get(url, HTTP_TIMEOUT);
+            String response = HttpUtil.get(url, httpTimeout);
             if (StrUtil.isBlank(response)) return klines;
 
             JSONObject json = JSONUtil.parseObj(response);
@@ -180,26 +191,11 @@ public class BacktestService {
                     klines.add(kline);
                 }
             }
-        } catch (Exception e) { log.error("获取K线数据失败: {}", e.getMessage()); }
+        } catch (Exception e) { log.error("获取K线数据失败", e); }
         return klines;
     }
 
-    /**
-     * 股票代码转腾讯行情代码（与StockService.toTencentCode保持一致）
-     * 支持：A股、美股、港股、北交所
-     */
-    private String toTencentCode(String stockCode) {
-        if (stockCode == null) return "";
-        String code = stockCode.trim();
-        if (code.startsWith("sh") || code.startsWith("sz") || code.startsWith("hk") || code.startsWith("us")) return code;
-        if (code.startsWith("SH") || code.startsWith("SZ") || code.startsWith("HK") || code.startsWith("US")) return code.toLowerCase();
-        if (code.matches("[A-Z]{1,5}")) return "us" + code;
-        if (code.matches("\\d{5}")) return "hk" + code;
-        if (code.startsWith("6")) return "sh" + code;
-        if (code.startsWith("0") || code.startsWith("3")) return "sz" + code;
-        if (code.startsWith("8") || code.startsWith("4")) return "bj" + code;
-        return "sh" + code;
-    }
+
 
     private BigDecimal calculateMA(List<Map<String, Object>> klines, int endIndex, int period) {
         BigDecimal sum = BigDecimal.ZERO; int count = 0;

@@ -44,6 +44,14 @@ cache:
   kline-ttl: 3600
   search-ttl: 600
 
+# HTTP超时配置（毫秒）
+http:
+  timeout:
+    quote: 5000
+    kline: 10000
+    search: 10000
+    global-search: 3000
+
 # 禁用LangChain4j自动配置
 langchain4j:
   open-ai:

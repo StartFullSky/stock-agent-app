@@ -14,8 +14,8 @@ import java.util.Map;
 @RequestMapping("/api/favorite")
 public class FavoriteController {
 
-    /** 默认用户ID，待接入认证后替换 */
-    private static final Long DEFAULT_USER_ID = 0L;
+    /** 默认用户ID，当请求头未提供X-User-Id时使用 */
+    private static final long DEFAULT_USER_ID = 0L;
 
     private final FavoriteService favoriteService;
 
@@ -25,25 +25,30 @@ public class FavoriteController {
 
     @Operation(summary = "获取自选股列表（含实时行情）")
     @GetMapping("/list")
-    public ApiResponse<List<Map<String, Object>>> list() {
-        return ApiResponse.ok(favoriteService.getFavorites(DEFAULT_USER_ID));
+    public ApiResponse<List<Map<String, Object>>> list(@RequestHeader(value = "X-User-Id", required = false) Long userId) {
+        long uid = userId != null ? userId : DEFAULT_USER_ID;
+        return ApiResponse.ok(favoriteService.getFavorites(uid));
     }
 
     @Operation(summary = "添加自选股")
     @PostMapping("/add")
-    public ApiResponse<String> add(@RequestBody Map<String, String> request) {
+    public ApiResponse<String> add(@RequestHeader(value = "X-User-Id", required = false) Long userId,
+                                   @RequestBody Map<String, String> request) {
+        long uid = userId != null ? userId : DEFAULT_USER_ID;
         String stockCode = request.get("stockCode");
         if (stockCode == null || stockCode.trim().isEmpty()) {
             return ApiResponse.fail(400, "股票代码不能为空");
         }
-        favoriteService.addFavorite(DEFAULT_USER_ID, stockCode.trim());
+        favoriteService.addFavorite(uid, stockCode.trim());
         return ApiResponse.ok("添加成功");
     }
 
     @Operation(summary = "删除自选股")
     @DeleteMapping("/remove")
-    public ApiResponse<String> remove(@RequestParam String code) {
-        boolean success = favoriteService.removeFavorite(DEFAULT_USER_ID, code);
+    public ApiResponse<String> remove(@RequestHeader(value = "X-User-Id", required = false) Long userId,
+                                      @RequestParam String code) {
+        long uid = userId != null ? userId : DEFAULT_USER_ID;
+        boolean success = favoriteService.removeFavorite(uid, code);
         if (!success) return ApiResponse.fail(404, "未找到该自选股");
         return ApiResponse.ok("删除成功");
     }

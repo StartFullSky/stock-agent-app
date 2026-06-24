@@ -39,6 +39,15 @@ public class StockService {
     @Value("${cache.search-ttl:600}")
     private long searchTtl;
 
+    @Value("${http.timeout.quote:5000}")
+    private int httpTimeoutQuote;
+
+    @Value("${http.timeout.kline:10000}")
+    private int httpTimeoutKline;
+
+    @Value("${http.timeout.global-search:3000}")
+    private int httpTimeoutGlobalSearch;
+
     private static final String TENCENT_API_URL = "http://qt.gtimg.cn/q=";
     private static final String SINA_KLINE_URL = "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData";
 
@@ -94,7 +103,7 @@ public class StockService {
                 return dto;
             }
         } catch (Exception e) {
-            log.error("获取行情失败: {}", e.getMessage());
+            log.error("获取行情失败", e);
         }
         return createEmptyQuote(stockCode);
     }
@@ -119,7 +128,7 @@ public class StockService {
                     item.put("changeRate", quote.getChangeRate());
                     results.add(item);
                 }
-            } catch (Exception e) { log.warn("获取指数行情失败 {}: {}", entry.getKey(), e.getMessage()); }
+            } catch (Exception e) { log.warn("获取指数行情失败 {}", entry.getKey(), e); }
         }
 
         if (!results.isEmpty()) {
@@ -143,7 +152,7 @@ public class StockService {
             int dataLen = Math.max(limit, 365);
             String url = SINA_KLINE_URL + "?symbol=" + sinaCode + "&scale=240&ma=no&datalen=" + dataLen;
             log.info("请求K线: {}", url);
-            String response = HttpUtil.get(url, 10000);
+            String response = HttpUtil.get(url, httpTimeoutKline);
             if (StrUtil.isBlank(response)) { log.warn("K线响应为空"); return results; }
 
             JSONArray arr = JSONUtil.parseArray(response);
@@ -205,7 +214,7 @@ public class StockService {
         if (keyword.matches("[a-zA-Z]+")) {
             String usCode = "us" + keyword.toUpperCase();
             try {
-                String resp = HttpUtil.get(TENCENT_API_URL + usCode, 3000);
+                String resp = HttpUtil.get(TENCENT_API_URL + usCode, httpTimeoutGlobalSearch);
                 if (StrUtil.isNotBlank(resp) && !resp.contains("v_" + usCode + "=\"\"")) {
                     String[] parts = resp.split("~");
                     if (parts.length > 3) {
@@ -214,12 +223,12 @@ public class StockService {
                         results.add(item);
                     }
                 }
-            } catch (Exception e) { log.warn("美股搜索失败: {}", e.getMessage()); }
+            } catch (Exception e) { log.warn("美股搜索失败", e); }
         }
         if (keyword.matches("\\d+")) {
             String hkCode = "hk" + String.format("%05d", Integer.parseInt(keyword));
             try {
-                String resp = HttpUtil.get(TENCENT_API_URL + hkCode, 3000);
+                String resp = HttpUtil.get(TENCENT_API_URL + hkCode, httpTimeoutGlobalSearch);
                 if (StrUtil.isNotBlank(resp) && !resp.contains("v_" + hkCode + "=\"\"")) {
                     String[] parts = resp.split("~");
                     if (parts.length > 3) {
@@ -228,7 +237,7 @@ public class StockService {
                         results.add(item);
                     }
                 }
-            } catch (Exception e) { log.warn("港股搜索失败: {}", e.getMessage()); }
+            } catch (Exception e) { log.warn("港股搜索失败", e); }
         }
         return results;
     }
@@ -243,20 +252,20 @@ public class StockService {
             }
             return result;
         } catch (Exception e) {
-            log.warn("缓存解析失败: {}", e.getMessage());
+            log.warn("缓存解析失败", e);
             return new ArrayList<>();
         }
     }
 
     private StockQuoteDTO fetchQuote(String stockCode) {
         String tencentCode = toTencentCode(stockCode);
-        String response = HttpUtil.get(TENCENT_API_URL + tencentCode, 5000);
+        String response = HttpUtil.get(TENCENT_API_URL + tencentCode, httpTimeoutQuote);
         if (StrUtil.isBlank(response)) return null;
         List<StockQuoteDTO> results = parseTencentResponse(response, List.of(stockCode));
         return results.isEmpty() ? null : results.get(0);
     }
 
-    private String toTencentCode(String stockCode) {
+    public String toTencentCode(String stockCode) {
         if (stockCode == null) return "";
         String code = stockCode.trim();
         if (code.startsWith("sh") || code.startsWith("sz") || code.startsWith("hk") || code.startsWith("us")) return code;
@@ -287,7 +296,7 @@ public class StockService {
                 if (p.length > 34) dto.setLowPrice(parseBD(p[34]));
                 if (p.length > 37) dto.setAmount(parseBD(p[37]));
                 results.add(dto);
-            } catch (Exception e) { log.warn("解析行情失败: {}", e.getMessage()); }
+            } catch (Exception e) { log.warn("解析行情失败", e); }
         }
         return results;
     }
