@@ -14,6 +14,9 @@ import java.util.Map;
 @RequestMapping("/api/favorite")
 public class FavoriteController {
 
+    /** 默认用户ID，待接入认证后替换 */
+    private static final Long DEFAULT_USER_ID = 0L;
+
     private final FavoriteService favoriteService;
 
     public FavoriteController(FavoriteService favoriteService) {
@@ -23,7 +26,7 @@ public class FavoriteController {
     @Operation(summary = "获取自选股列表（含实时行情）")
     @GetMapping("/list")
     public ApiResponse<List<Map<String, Object>>> list() {
-        return ApiResponse.ok(favoriteService.getFavorites(0L));
+        return ApiResponse.ok(favoriteService.getFavorites(DEFAULT_USER_ID));
     }
 
     @Operation(summary = "添加自选股")
@@ -33,14 +36,14 @@ public class FavoriteController {
         if (stockCode == null || stockCode.trim().isEmpty()) {
             return ApiResponse.fail(400, "股票代码不能为空");
         }
-        favoriteService.addFavorite(0L, stockCode.trim());
+        favoriteService.addFavorite(DEFAULT_USER_ID, stockCode.trim());
         return ApiResponse.ok("添加成功");
     }
 
     @Operation(summary = "删除自选股")
     @DeleteMapping("/remove")
     public ApiResponse<String> remove(@RequestParam String code) {
-        boolean success = favoriteService.removeFavorite(0L, code);
+        boolean success = favoriteService.removeFavorite(DEFAULT_USER_ID, code);
         if (!success) return ApiResponse.fail(404, "未找到该自选股");
         return ApiResponse.ok("删除成功");
     }

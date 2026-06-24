@@ -13,21 +13,28 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import jakarta.annotation.PreDestroy;
 
 @Tag(name = "AI对话")
 @RestController
 @RequestMapping("/api/chat")
 public class ChatController {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ChatController.class);
+    /** 默认用户ID，待接入认证后替换 */
+    private static final Long DEFAULT_USER_ID = 0L;
     private final AgentService agentService;
     private final ChatHistoryMapper chatHistoryMapper;
-    private final ExecutorService executor = Executors.newCachedThreadPool();
+
+    // 注：原ExecutorService已移除，TokenStream回调由LangChain4j内部线程池管理
 
     public ChatController(AgentService agentService, ChatHistoryMapper chatHistoryMapper) {
         this.agentService = agentService;
         this.chatHistoryMapper = chatHistoryMapper;
+    }
+
+    @PreDestroy
+    public void destroy() {
+        log.info("ChatController 销毁");
     }
 
     @Operation(summary = "发送消息（同步）")
@@ -38,9 +45,9 @@ public class ChatController {
             return ApiResponse.fail(400, "消息不能为空");
         }
         log.info("收到消息: {}", message);
-        saveChat(0L, "user", message);
-        String reply = agentService.chat(0L, message);
-        saveChat(0L, "assistant", reply);
+        saveChat(DEFAULT_USER_ID, "user", message);
+        String reply = agentService.chat(DEFAULT_USER_ID, message);
+        saveChat(DEFAULT_USER_ID, "assistant", reply);
         return ApiResponse.ok(reply);
     }
 
@@ -63,12 +70,13 @@ public class ChatController {
         }
 
         log.info("流式消息: {}", message);
-        saveChat(0L, "user", message);
+        saveChat(DEFAULT_USER_ID, "user", message);
 
         // 累积完整回复，用于保存聊天记录
-        StringBuilder fullReply = new StringBuilder();
+        // 使用StringBuffer保证线程安全（onNext可能从不同线程调用）
+        StringBuffer fullReply = new StringBuffer();
 
-        TokenStream tokenStream = agentService.chatStream(0L, message);
+        TokenStream tokenStream = agentService.chatStream(DEFAULT_USER_ID, message);
 
         tokenStream
             .onNext(token -> {
@@ -81,9 +89,9 @@ public class ChatController {
             })
             .onComplete(response -> {
                 try {
-                    String aiText = response.content().text();
+                    String aiText = (response.content() != null) ? response.content().text() : null;
                     String replyToSave = (aiText != null && !aiText.isEmpty()) ? aiText : fullReply.toString();
-                    saveChat(0L, "assistant", replyToSave);
+                    saveChat(DEFAULT_USER_ID, "assistant", replyToSave);
                     emitter.send(SseEmitter.event().name("done").data(""));
                     emitter.complete();
                 } catch (Exception e) {
@@ -112,17 +120,19 @@ public class ChatController {
     @Operation(summary = "测试对话（GET）")
     @GetMapping("/test")
     public ApiResponse<String> test(@RequestParam(defaultValue = "你好") String msg) {
-        return ApiResponse.ok(agentService.chat(0L, msg));
+        return ApiResponse.ok(agentService.chat(DEFAULT_USER_ID, msg));
     }
 
     @Operation(summary = "获取历史对话")
     @GetMapping("/history")
     public ApiResponse<List<ChatHistory>> history(@RequestParam(defaultValue = "50") int limit) {
+        // 校验limit参数，防止负值；Math.min已限制上限200
+        int safeLimit = Math.max(1, Math.min(limit, 200));
         List<ChatHistory> list = chatHistoryMapper.selectList(
             new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatHistory>()
-                .eq(ChatHistory::getUserId, 0L)
+                .eq(ChatHistory::getUserId, DEFAULT_USER_ID)
                 .orderByDesc(ChatHistory::getCreatedAt)
-                .last("LIMIT " + Math.min(limit, 200))
+                .last("LIMIT " + safeLimit)
         );
         Collections.reverse(list);
         return ApiResponse.ok(list);
@@ -133,7 +143,7 @@ public class ChatController {
     public ApiResponse<String> clearHistory() {
         chatHistoryMapper.delete(
             new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatHistory>()
-                .eq(ChatHistory::getUserId, 0L)
+                .eq(ChatHistory::getUserId, DEFAULT_USER_ID)
         );
         return ApiResponse.ok("已清空");
     }

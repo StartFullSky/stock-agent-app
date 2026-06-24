@@ -71,9 +71,9 @@ public class StockService {
         List<StockSearchDTO> result = stockInfoMapper.selectList(wrapper).stream()
                 .map(this::convertToSearchDTO).collect(Collectors.toList());
 
-        if (!result.isEmpty()) {
-            redisTemplate.opsForValue().set(cacheKey, JSONUtil.toJsonStr(result), searchTtl, TimeUnit.SECONDS);
-        }
+        // 缓存结果（包括空结果），防止缓存击穿；空结果使用较短TTL
+        long ttl = result.isEmpty() ? Math.min(searchTtl, 60) : searchTtl;
+        redisTemplate.opsForValue().set(cacheKey, JSONUtil.toJsonStr(result), ttl, TimeUnit.SECONDS);
         return result;
     }
 
@@ -119,7 +119,7 @@ public class StockService {
                     item.put("changeRate", quote.getChangeRate());
                     results.add(item);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) { log.warn("获取指数行情失败 {}: {}", entry.getKey(), e.getMessage()); }
         }
 
         if (!results.isEmpty()) {
@@ -292,7 +292,8 @@ public class StockService {
         return results;
     }
 
-    private BigDecimal parseBD(String s) { try { return new BigDecimal(s.trim()); } catch (Exception e) { return BigDecimal.ZERO; } }
+    /** 解析BigDecimal，失败返回null（避免将解析错误误认为零值） */
+    private BigDecimal parseBD(String s) { try { return new BigDecimal(s.trim()); } catch (Exception e) { return null; } }
     private Long parseLong(String s) { try { return Long.parseLong(s.trim().split("\\.")[0]); } catch (Exception e) { return 0L; } }
     private StockQuoteDTO createEmptyQuote(String code) { StockQuoteDTO dto = new StockQuoteDTO(); dto.setStockCode(code); dto.setStockName("未知"); dto.setCurrentPrice(BigDecimal.ZERO); dto.setChangeRate(BigDecimal.ZERO); return dto; }
     private StockSearchDTO convertToSearchDTO(StockInfo e) { StockSearchDTO dto = new StockSearchDTO(); dto.setStockCode(e.getStockCode()); dto.setStockName(e.getStockName()); dto.setMarket(e.getMarket()); dto.setIndustry(e.getIndustry()); return dto; }

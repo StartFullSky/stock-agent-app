@@ -40,6 +40,13 @@ public class GlobalExceptionHandler {
         return ApiResponse.fail(400, e.getMessage());
     }
 
+    @ExceptionHandler(NumberFormatException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ApiResponse<?> handleNumberFormatException(NumberFormatException e) {
+        log.warn("数字格式错误: {}", e.getMessage());
+        return ApiResponse.fail(400, "数字格式错误: " + e.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public ApiResponse<?> handleException(Exception e) {

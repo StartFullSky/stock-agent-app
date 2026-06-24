@@ -6,6 +6,11 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 import java.math.BigDecimal;
 
+/**
+ * 股票行情缓存实体
+ * 注意：当前StockService使用Redis进行行情缓存，此实体作为数据库级缓存备用方案保留。
+ * 如需启用数据库缓存，可在StockService中注入StockQuoteCacheMapper使用。
+ */
 @Data
 @TableName("stock_quote_cache")
 public class StockQuoteCache {

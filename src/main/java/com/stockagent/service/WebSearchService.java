@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Web搜索服务 - 免费多源搜索
@@ -24,6 +26,10 @@ import java.util.Map;
 public class WebSearchService {
 
     private static final int DEFAULT_TIMEOUT = 10000;
+
+    /** 用于从HTML中提取链接的正则，比纯字符串分割更健壮 */
+    private static final Pattern HREF_PATTERN = Pattern.compile("href=\"(https?://[^\"]+)\"");
+    private static final Pattern TITLE_PATTERN = Pattern.compile("<a[^>]*>(.*?)</a>", Pattern.DOTALL);
 
     public List<Map<String, String>> search(String query, int maxResults) {
         if (StrUtil.isBlank(query)) return new ArrayList<>();
@@ -45,22 +51,25 @@ public class WebSearchService {
             String html = HttpUtil.get(url, DEFAULT_TIMEOUT);
             if (StrUtil.isBlank(html)) return results;
 
-            String[] lines = html.split("<h2>");
-            for (int i = 1; i < lines.length && results.size() < maxResults; i++) {
-                String line = lines[i];
+            // 使用正则提取<h2>块中的链接和标题，比字符串split更健壮
+            String[] sections = html.split("<h2>");
+            for (int i = 1; i < sections.length && results.size() < maxResults; i++) {
+                String section = sections[i];
                 try {
-                    int hrefStart = line.indexOf("href=\"") + 6;
-                    int hrefEnd = line.indexOf("\"", hrefStart);
-                    String link = line.substring(hrefStart, hrefEnd);
-                    int titleStart = line.indexOf(">", line.indexOf("<a")) + 1;
-                    int titleEnd = line.indexOf("</a>", titleStart);
-                    String title = line.substring(titleStart, titleEnd).replaceAll("<[^>]+>", "").trim();
-                    if (StrUtil.isNotBlank(title) && title.length() > 5) {
-                        Map<String, String> item = new HashMap<>();
-                        item.put("title", title); item.put("url", link); item.put("source", "新浪财经");
-                        results.add(item);
+                    Matcher hrefMatcher = HREF_PATTERN.matcher(section);
+                    Matcher titleMatcher = TITLE_PATTERN.matcher(section);
+                    if (hrefMatcher.find() && titleMatcher.find()) {
+                        String link = hrefMatcher.group(1);
+                        String title = titleMatcher.group(1).replaceAll("<[^>]+>", "").trim();
+                        if (StrUtil.isNotBlank(title) && title.length() > 5 && StrUtil.isNotBlank(link)) {
+                            Map<String, String> item = new HashMap<>();
+                            item.put("title", title); item.put("url", link); item.put("source", "新浪财经");
+                            results.add(item);
+                        }
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception e) {
+                    log.debug("解析新浪搜索结果条目失败: {}", e.getMessage());
+                }
             }
         } catch (Exception e) { log.warn("新浪搜索失败: {}", e.getMessage()); }
         return results;
