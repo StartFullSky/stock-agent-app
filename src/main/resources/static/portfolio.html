@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>持仓管理 - Stock Agent</title>
+    <link rel="stylesheet" href="/css/dark-theme.css">
+    <style>
+        .summary-cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; margin-bottom:20px; }
+        .summary-card { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:14px; }
+        .summary-label { font-size:11px; color:var(--text2); margin-bottom:4px; }
+        .summary-value { font-size:22px; font-weight:700; }
+        .portfolio-item { background:var(--bg2); border:1px solid var(--border); border-radius:8px; margin-bottom:12px; overflow:hidden; }
+        .portfolio-header { display:flex; align-items:center; padding:14px; cursor:pointer; }
+        .portfolio-header:hover { background:var(--bg3); }
+        .portfolio-info { flex:1; }
+        .portfolio-name { font-size:15px; font-weight:600; }
+        .portfolio-code { font-size:11px; color:var(--text2); margin-top:2px; }
+        .portfolio-pnl { text-align:right; min-width:120px; }
+        .portfolio-pnl .pnl-value { font-size:18px; font-weight:700; }
+        .portfolio-pnl .pnl-rate { font-size:12px; margin-top:2px; }
+        .portfolio-detail { display:none; padding:0 14px 14px; border-top:1px solid var(--border); }
+        .portfolio-detail.show { display:block; }
+        .trade-table { width:100%; margin-top:10px; }
+        .trade-table th { font-size:11px; color:var(--text2); text-align:left; padding:8px; border-bottom:1px solid var(--border); }
+        .trade-table td { font-size:12px; padding:8px; border-bottom:1px solid var(--border); }
+        .modal { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); z-index:100; align-items:center; justify-content:center; }
+        .modal.show { display:flex; }
+        .modal-content { background:var(--bg2); border:1px solid var(--border); border-radius:10px; width:90%; max-width:500px; padding:20px; }
+        .modal-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; }
+        .form-row { display:flex; gap:10px; }
+        .form-row .form-group { flex:1; }
+        .tabs { display:flex; gap:4px; margin-bottom:16px; }
+        .tab { padding:8px 16px; border-radius:6px; font-size:13px; cursor:pointer; background:var(--bg3); border:1px solid var(--border); color:var(--text2); }
+        .tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <a href="/" class="nav-brand">📈 Stock Agent</a>
+        <div class="nav-links">
+            <a href="/" class="nav-link">AI Chat</a>
+            <a href="/dashboard.html" class="nav-link">每日复盘</a>
+            <a href="/watchlist.html" class="nav-link">自选股</a>
+            <a href="/portfolio.html" class="nav-link active">持仓</a>
+            <a href="/news-radar.html" class="nav-link">资讯雷达</a>
+        </div>
+    </nav>
+
+    <div class="page">
+        <div class="page-header">
+            <h1 class="page-title">💼 持仓管理</h1>
+            <p class="page-desc">记录交易、追踪盈亏</p>
+        </div>
+
+        <div class="summary-cards" id="summaryCards">
+            <div class="summary-card"><div class="summary-label">持仓数量</div><div class="summary-value" id="openCount">-</div></div>
+            <div class="summary-card"><div class="summary-label">总市值</div><div class="summary-value" id="totalValue">-</div></div>
+            <div class="summary-card"><div class="summary-label">未实现盈亏</div><div class="summary-value" id="unrealizedPnl">-</div></div>
+            <div class="summary-card"><div class="summary-label">已实现盈亏</div><div class="summary-value" id="realizedPnl">-</div></div>
+        </div>
+
+        <div class="tabs">
+            <span class="tab active" id="tabOpen" onclick="showTab('open')">持仓中</span>
+            <span class="tab" id="tabClosed" onclick="showTab('closed')">已清仓</span>
+            <span style="flex:1"></span>
+            <button class="btn btn-primary" onclick="showAddModal()">+ 新建持仓</button>
+        </div>
+
+        <div id="portfolioList">
+            <div class="loading">加载中...</div>
+        </div>
+    </div>
+
+    <!-- Add Portfolio Modal -->
+    <div class="modal" id="addModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="modal-title" id="modalTitle">新建持仓</span>
+                <button style="background:none;border:none;color:var(--text2);font-size:20px;cursor:pointer" onclick="closeAddModal()">&times;</button>
+            </div>
+            <div class="form-group">
+                <label class="form-label">股票代码</label>
+                <input type="text" class="input" id="pCode" placeholder="600519">
+            </div>
+            <div class="form-group">
+                <label class="form-label">股票名称</label>
+                <input type="text" class="input" id="pName" placeholder="贵州茅台">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">市场</label>
+                    <select class="input" id="pMarket"><option value="A">A股</option><option value="HK">港股</option><option value="US">美股</option></select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">买入价格</label>
+                    <input type="number" class="input" id="pPrice" step="0.01" placeholder="1800.00">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">数量（股）</label>
+                    <input type="number" class="input" id="pQty" placeholder="100">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">交易日期</label>
+                    <input type="date" class="input" id="pDate">
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">手续费</label>
+                <input type="number" class="input" id="pFee" step="0.01" placeholder="0" value="0">
+            </div>
+            <div style="text-align:right;margin-top:16px">
+                <button class="btn" onclick="closeAddModal()">取消</button>
+                <button class="btn btn-primary" onclick="createPortfolio()" style="margin-left:8px">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Trade Modal -->
+    <div class="modal" id="tradeModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="modal-title">添加交易</span>
+                <button style="background:none;border:none;color:var(--text2);font-size:20px;cursor:pointer" onclick="closeTradeModal()">&times;</button>
+            </div>
+            <input type="hidden" id="tPortfolioId">
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">交易类型</label>
+                    <select class="input" id="tType"><option value="BUY">买入</option><option value="SELL">卖出</option></select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">价格</label>
+                    <input type="number" class="input" id="tPrice" step="0.01">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">数量</label>
+                    <input type="number" class="input" id="tQty">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">日期</label>
+                    <input type="date" class="input" id="tDate">
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">手续费</label>
+                <input type="number" class="input" id="tFee" step="0.01" value="0">
+            </div>
+            <div style="text-align:right;margin-top:16px">
+                <button class="btn" onclick="closeTradeModal()">取消</button>
+                <button class="btn btn-primary" onclick="addTrade()" style="margin-left:8px">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+var currentTab = 'open';
+var portfolioData = {open:[], closed:[]};
+
+window.onload = function() {
+    document.getElementById('pDate').value = new Date().toISOString().split('T')[0];
+    loadAll();
+};
+
+function loadAll() {
+    loadSummary();
+    loadPortfolios();
+}
+
+function loadSummary() {
+    fetch('/api/portfolio/summary').then(r=>r.json()).then(data=>{
+        if(data.success) {
+            var d = data.data;
+            document.getElementById('openCount').textContent = d.openCount||0;
+            document.getElementById('totalValue').textContent = '¥'+formatNum(d.totalMarketValue);
+            var upnl = d.totalUnrealizedPnl||0;
+            document.getElementById('unrealizedPnl').innerHTML = '<span class="'+(upnl>=0?'up':'down')+'">'+(upnl>=0?'+':'')+formatNum(upnl)+'</span>';
+            var rpnl = d.totalRealizedPnl||0;
+            document.getElementById('realizedPnl').innerHTML = '<span class="'+(rpnl>=0?'up':'down')+'">'+(rpnl>=0?'+':'')+formatNum(rpnl)+'</span>';
+        }
+    });
+}
+
+function loadPortfolios() {
+    Promise.all([
+        fetch('/api/portfolio/open').then(r=>r.json()),
+        fetch('/api/portfolio/closed').then(r=>r.json())
+    ]).then(([openData,closedData])=>{
+        portfolioData.open = openData.success?openData.data:[];
+        portfolioData.closed = closedData.success?closedData.data:[];
+        renderList();
+    });
+}
+
+function showTab(tab) {
+    currentTab = tab;
+    document.getElementById('tabOpen').className = tab==='open'?'tab active':'tab';
+    document.getElementById('tabClosed').className = tab==='closed'?'tab active':'tab';
+    renderList();
+}
+
+function renderList() {
+    var list = portfolioData[currentTab]||[];
+    if(!list.length) {
+        document.getElementById('portfolioList').innerHTML = '<div class="empty-state">暂无'+(currentTab==='open'?'持仓':'已清仓记录')+'</div>';
+        return;
+    }
+    document.getElementById('portfolioList').innerHTML = list.map(p=>{
+        var pnl = currentTab==='open'?(p.unrealizedPnl||0):(p.realizedPnl||0);
+        var rate = p.pnlRate||0;
+        var cls = pnl>=0?'up':'down';
+        var priceInfo = currentTab==='open'&&p.currentPrice?'<span style="font-size:12px;color:var(--text2)">现价: '+p.currentPrice+'</span>':'';
+        return '<div class="portfolio-item">'+
+            '<div class="portfolio-header" onclick="toggleDetail('+p.id+')">'+
+                '<div class="portfolio-info">'+
+                    '<div class="portfolio-name">'+(p.stockName||p.stockCode)+' <span style="font-size:10px;color:var(--text2)">'+(p.market||'A')+'</span></div>'+
+                    '<div class="portfolio-code">'+p.stockCode+' · 持仓 '+p.holdingQty+'股 · 成本 '+p.avgBuyPrice+'</div>'+
+                '</div>'+
+                '<div class="portfolio-pnl">'+
+                    '<div class="pnl-value '+cls+'">'+(pnl>=0?'+':'')+formatNum(pnl)+'</div>'+
+                    '<div class="pnl-rate '+cls+'">'+(rate>=0?'+':'')+rate+'%</div>'+
+                    priceInfo+
+                '</div>'+
+                '<div style="margin-left:12px">'+
+                    (currentTab==='open'?'<button class="btn btn-sm" onclick="event.stopPropagation();showTradeModal('+p.id+')">交易</button>':'')+
+                    '<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deletePortfolio('+p.id+')" style="margin-left:4px">删除</button>'+
+                '</div>'+
+            '</div>'+
+            '<div class="portfolio-detail" id="detail_'+p.id+'">'+
+                renderTrades(p)+
+            '</div>'+
+        '</div>';
+    }).join('');
+}
+
+function renderTrades(p) {
+    if(!p.trades||!p.trades.length) return '<div class="empty-state">暂无交易记录</div>';
+    var html = '<table class="trade-table"><thead><tr><th>类型</th><th>价格</th><th>数量</th><th>日期</th><th>手续费</th></tr></thead><tbody>';
+    p.trades.forEach(t=>{
+        var cls = t.tradeType==='BUY'?'up':'down';
+        html += '<tr><td class="'+cls+'">'+(t.tradeType==='BUY'?'买入':'卖出')+'</td>'+
+            '<td>'+t.price+'</td><td>'+t.quantity+'</td><td>'+t.tradeDate+'</td><td>'+(t.fee||0)+'</td></tr>';
+    });
+    html += '</tbody></table>';
+    return html;
+}
+
+function toggleDetail(id) {
+    var el = document.getElementById('detail_'+id);
+    el.classList.toggle('show');
+}
+
+function showAddModal() { document.getElementById('addModal').classList.add('show'); }
+function closeAddModal() { document.getElementById('addModal').classList.remove('show'); }
+
+function showTradeModal(portfolioId) {
+    document.getElementById('tPortfolioId').value = portfolioId;
+    document.getElementById('tDate').value = new Date().toISOString().split('T')[0];
+    document.getElementById('tradeModal').classList.add('show');
+}
+function closeTradeModal() { document.getElementById('tradeModal').classList.remove('show'); }
+
+function createPortfolio() {
+    var data = {
+        stockCode: document.getElementById('pCode').value.trim(),
+        stockName: document.getElementById('pName').value.trim(),
+        market: document.getElementById('pMarket').value,
+        price: document.getElementById('pPrice').value,
+        quantity: document.getElementById('pQty').value,
+        tradeDate: document.getElementById('pDate').value,
+        fee: document.getElementById('pFee').value||0
+    };
+    if(!data.stockCode||!data.price||!data.quantity) { alert('请填写必填项'); return; }
+    fetch('/api/portfolio/create',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(data)
+    }).then(r=>r.json()).then(r=>{
+        if(r.success) { closeAddModal(); loadAll(); }
+        else alert(r.message||'创建失败');
+    });
+}
+
+function addTrade() {
+    var data = {
+        portfolioId: document.getElementById('tPortfolioId').value,
+        tradeType: document.getElementById('tType').value,
+        price: document.getElementById('tPrice').value,
+        quantity: document.getElementById('tQty').value,
+        tradeDate: document.getElementById('tDate').value,
+        fee: document.getElementById('tFee').value||0
+    };
+    if(!data.price||!data.quantity) { alert('请填写价格和数量'); return; }
+    fetch('/api/portfolio/add-trade',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(data)
+    }).then(r=>r.json()).then(r=>{
+        if(r.success) { closeTradeModal(); loadAll(); }
+        else alert(r.message||'添加失败');
+    });
+}
+
+function deletePortfolio(id) {
+    if(!confirm('确定删除此持仓及所有交易记录？')) return;
+    fetch('/api/portfolio/delete/'+id,{method:'DELETE'}).then(r=>r.json()).then(r=>{
+        if(r.success) loadAll();
+    });
+}
+
+function formatNum(n) {
+    if(n==null) return '0';
+    return Number(n).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+    </script>
+</body>
+</html>

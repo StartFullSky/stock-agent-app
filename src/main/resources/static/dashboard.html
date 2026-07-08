@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>每日复盘 - Stock Agent</title>
+    <link rel="stylesheet" href="/css/dark-theme.css">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        .indices-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+        .index-card { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 12px; cursor: pointer; transition: all 0.2s; }
+        .index-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+        .index-name { font-size: 11px; color: var(--text2); margin-bottom: 4px; }
+        .index-price { font-size: 18px; font-weight: 700; }
+        .index-change { font-size: 12px; margin-top: 2px; }
+        .ranking-table { max-height: 400px; overflow-y: auto; }
+        .news-item { padding: 10px 0; border-bottom: 1px solid var(--border); }
+        .news-item:last-child { border-bottom: none; }
+        .news-title { font-size: 13px; color: var(--text); margin-bottom: 4px; }
+        .news-meta { font-size: 11px; color: var(--text2); }
+        .section-title { font-size: 16px; font-weight: 600; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <a href="/" class="nav-brand">📈 Stock Agent</a>
+        <div class="nav-links">
+            <a href="/" class="nav-link">AI Chat</a>
+            <a href="/dashboard.html" class="nav-link active">每日复盘</a>
+            <a href="/watchlist.html" class="nav-link">自选股</a>
+            <a href="/portfolio.html" class="nav-link">持仓</a>
+            <a href="/news-radar.html" class="nav-link">资讯雷达</a>
+        </div>
+    </nav>
+
+    <div class="page">
+        <div class="page-header">
+            <h1 class="page-title">📊 每日复盘</h1>
+            <p class="page-desc" id="dateInfo">加载中...</p>
+        </div>
+
+        <!-- Indices -->
+        <div class="card" style="margin-bottom:16px">
+            <div class="card-header">
+                <span class="card-title">大盘指数</span>
+                <button class="btn btn-sm" onclick="loadIndices()">刷新</button>
+            </div>
+            <div class="indices-grid" id="indicesGrid">
+                <div class="loading">加载中...</div>
+            </div>
+        </div>
+
+        <div class="two-col">
+            <!-- Rankings -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">涨跌榜</span>
+                </div>
+                <div class="card-header" style="padding:8px 0">
+                    <span class="btn btn-sm btn-primary" id="tabGainers" onclick="showRankTab('gainers')">涨幅榜</span>
+                    <span class="btn btn-sm" id="tabLosers" onclick="showRankTab('losers')">跌幅榜</span>
+                </div>
+                <div class="ranking-table" id="rankingTable">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+
+            <!-- News -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">财经要闻</span>
+                    <a href="/news-radar.html" class="btn btn-sm">更多</a>
+                </div>
+                <div id="newsList">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Summary -->
+        <div class="card" style="margin-top:16px">
+            <div class="card-header">
+                <span class="card-title">AI 市场分析</span>
+                <button class="btn btn-sm btn-primary" id="aiBtn" onclick="loadAiSummary()">生成分析</button>
+            </div>
+            <div id="aiSummary" style="min-height:80px;color:var(--text2);font-size:13px">
+                点击"生成分析"按钮，AI 将为您总结今日市场情况
+            </div>
+        </div>
+    </div>
+
+    <script>
+var rankings = {gainers: [], losers: []};
+var currentRankTab = 'gainers';
+
+window.onload = function() {
+    document.getElementById('dateInfo').textContent = new Date().toLocaleDateString('zh-CN', {year:'numeric',month:'long',day:'numeric',weekday:'long'});
+    loadDashboard();
+};
+
+function loadDashboard() {
+    fetch('/api/dashboard/summary').then(r=>r.json()).then(data=>{
+        if(data.success) {
+            renderIndices(data.data.indices);
+            rankings = data.data.rankings;
+            renderRankings();
+            renderNews(data.data.news);
+        }
+    }).catch(e=>{
+        document.getElementById('indicesGrid').innerHTML = '<div class="empty-state">加载失败</div>';
+    });
+}
+
+function loadIndices() {
+    fetch('/api/dashboard/indices').then(r=>r.json()).then(data=>{
+        if(data.success) renderIndices(data.data);
+    });
+}
+
+function renderIndices(indices) {
+    if(!indices||!indices.length) {
+        document.getElementById('indicesGrid').innerHTML = '<div class="empty-state">暂无数据</div>';
+        return;
+    }
+    document.getElementById('indicesGrid').innerHTML = indices.map(idx=>{
+        var rate = parseFloat(idx.changeRate)||0;
+        var cls = rate>=0 ? 'up' : 'down';
+        return '<div class="index-card" onclick="searchStock(\''+idx.name+'\')">'+
+            '<div class="index-name">'+idx.name+'</div>'+
+            '<div class="index-price '+cls+'">'+idx.price+'</div>'+
+            '<div class="index-change '+cls+'">'+(rate>=0?'+':'')+rate+'%</div>'+
+        '</div>';
+    }).join('');
+}
+
+function showRankTab(tab) {
+    currentRankTab = tab;
+    document.getElementById('tabGainers').className = tab==='gainers'?'btn btn-sm btn-primary':'btn btn-sm';
+    document.getElementById('tabLosers').className = tab==='losers'?'btn btn-sm btn-primary':'btn btn-sm';
+    renderRankings();
+}
+
+function renderRankings() {
+    var list = rankings[currentRankTab]||[];
+    if(!list.length) {
+        document.getElementById('rankingTable').innerHTML = '<div class="empty-state">暂无数据</div>';
+        return;
+    }
+    var html = '<table class="table"><thead><tr><th>代码</th><th>名称</th><th>价格</th><th>涨跌幅</th></tr></thead><tbody>';
+    list.forEach(s=>{
+        var rate = parseFloat(s.changeRate)||0;
+        var cls = rate>=0?'up':'down';
+        html += '<tr onclick="searchStock(\''+s.code+'\')" style="cursor:pointer">'+
+            '<td>'+s.code+'</td><td>'+s.name+'</td><td>'+s.price+'</td>'+
+            '<td class="'+cls+'">'+(rate>=0?'+':'')+rate+'%</td></tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById('rankingTable').innerHTML = html;
+}
+
+function renderNews(news) {
+    if(!news||!news.length) {
+        document.getElementById('newsList').innerHTML = '<div class="empty-state">暂无新闻</div>';
+        return;
+    }
+    document.getElementById('newsList').innerHTML = news.slice(0,8).map(n=>
+        '<div class="news-item">'+
+            '<div class="news-title">'+n.title+'</div>'+
+            '<div class="news-meta">'+(n.source||'')+' · '+(n.time||'')+'</div>'+
+        '</div>'
+    ).join('');
+}
+
+function loadAiSummary() {
+    var btn = document.getElementById('aiBtn');
+    var div = document.getElementById('aiSummary');
+    btn.disabled = true; btn.textContent = '分析中...';
+    div.innerHTML = '<div class="loading">AI 正在分析今日市场...</div>';
+
+    fetch('/api/dashboard/summary').then(r=>r.json()).then(data=>{
+        if(data.success&&data.data.summaryText) {
+            // Send to AI for analysis
+            fetch('/api/chat/stream',{
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({message:'请用简洁专业的语言分析以下市场数据，给出今日市场总结和明日关注点：\n\n'+data.data.summaryText})
+            }).then(res=>{
+                var reader = res.body.getReader();
+                var decoder = new TextDecoder();
+                var fullText = '';
+                function read() {
+                    return reader.read().then(result=>{
+                        if(result.done) { btn.disabled=false; btn.textContent='生成分析'; return; }
+                        var chunk = decoder.decode(result.value,{stream:true});
+                        chunk.split('\n').forEach(line=>{
+                            if(line.indexOf('data:')===0) {
+                                fullText += line.substring(5);
+                                div.innerHTML = fullText.replace(/\n/g,'<br>');
+                            }
+                        });
+                        return read();
+                    });
+                }
+                return read();
+            }).catch(e=>{ div.innerHTML='分析失败: '+e.message; btn.disabled=false; btn.textContent='生成分析'; });
+        }
+    }).catch(e=>{ div.innerHTML='获取数据失败'; btn.disabled=false; btn.textContent='生成分析'; });
+}
+
+function searchStock(q) { window.location.href='/#search='+encodeURIComponent(q); }
+    </script>
+</body>
+</html>

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>自选股 - Stock Agent</title>
+    <link rel="stylesheet" href="/css/dark-theme.css">
+    <style>
+        .toolbar { display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
+        .toolbar .input { width:200px; }
+        .group-tabs { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:16px; }
+        .group-tab { padding:6px 14px; border-radius:14px; font-size:12px; cursor:pointer; background:var(--bg3); border:1px solid var(--border); color:var(--text2); transition:all 0.2s; }
+        .group-tab:hover { border-color:var(--accent); }
+        .group-tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+        .stock-row { display:flex; align-items:center; padding:10px 12px; border-bottom:1px solid var(--border); cursor:pointer; transition:background 0.2s; }
+        .stock-row:hover { background:var(--bg3); }
+        .stock-row .stock-info { flex:1; }
+        .stock-row .stock-name { font-size:14px; font-weight:600; }
+        .stock-row .stock-code { font-size:11px; color:var(--text2); margin-top:2px; }
+        .stock-row .stock-price { text-align:right; min-width:80px; }
+        .stock-row .stock-price .price { font-size:16px; font-weight:700; }
+        .stock-row .stock-price .change { font-size:11px; margin-top:2px; }
+        .stock-row .stock-actions { margin-left:12px; }
+        .modal { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); z-index:100; align-items:center; justify-content:center; }
+        .modal.show { display:flex; }
+        .modal-content { background:var(--bg2); border:1px solid var(--border); border-radius:10px; width:90%; max-width:500px; padding:20px; }
+        .modal-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; }
+        .modal-title { font-size:16px; font-weight:600; }
+        .modal-close { background:none; border:none; color:var(--text2); font-size:20px; cursor:pointer; }
+        .form-group { margin-bottom:12px; }
+        .form-label { display:block; font-size:12px; color:var(--text2); margin-bottom:4px; }
+        .form-row { display:flex; gap:10px; }
+        .form-row .form-group { flex:1; }
+        .batch-textarea { width:100%; height:120px; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:10px; border-radius:6px; font-size:13px; resize:vertical; }
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <a href="/" class="nav-brand">📈 Stock Agent</a>
+        <div class="nav-links">
+            <a href="/" class="nav-link">AI Chat</a>
+            <a href="/dashboard.html" class="nav-link">每日复盘</a>
+            <a href="/watchlist.html" class="nav-link active">自选股</a>
+            <a href="/portfolio.html" class="nav-link">持仓</a>
+            <a href="/news-radar.html" class="nav-link">资讯雷达</a>
+        </div>
+    </nav>
+
+    <div class="page">
+        <div class="page-header">
+            <h1 class="page-title">⭐ 自选股</h1>
+            <p class="page-desc">管理你的自选股票，支持批量添加和分组</p>
+        </div>
+
+        <div class="toolbar">
+            <input type="text" class="input" id="addInput" placeholder="输入股票代码 (如 600519)" onkeydown="if(event.key==='Enter')addStock()">
+            <button class="btn btn-primary" onclick="addStock()">添加</button>
+            <button class="btn" onclick="showBatchModal()">批量添加</button>
+            <button class="btn" onclick="loadWatchlist()">刷新</button>
+        </div>
+
+        <div class="group-tabs" id="groupTabs"></div>
+
+        <div class="card">
+            <div id="stockList">
+                <div class="loading">加载中...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Batch Add Modal -->
+    <div class="modal" id="batchModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="modal-title">批量添加自选股</span>
+                <button class="modal-close" onclick="closeBatchModal()">&times;</button>
+            </div>
+            <div class="form-group">
+                <label class="form-label">分组名称</label>
+                <input type="text" class="input" id="batchGroup" placeholder="默认分组" value="">
+            </div>
+            <div class="form-group">
+                <label class="form-label">股票代码（逗号、空格或换行分隔）</label>
+                <textarea class="batch-textarea" id="batchCodes" placeholder="600519, 000858, 601318&#10;AAPL, TSLA, GOOGL"></textarea>
+            </div>
+            <div style="text-align:right">
+                <button class="btn" onclick="closeBatchModal()">取消</button>
+                <button class="btn btn-primary" onclick="batchAdd()" style="margin-left:8px">添加</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+var currentGroup = 'all';
+var watchlistData = [];
+
+window.onload = function() { loadWatchlist(); };
+
+function loadWatchlist() {
+    fetch('/api/watchlist/list').then(r=>r.json()).then(data=>{
+        if(data.success) {
+            watchlistData = data.data||[];
+            renderGroups();
+            renderList();
+        }
+    }).catch(e=>{
+        document.getElementById('stockList').innerHTML = '<div class="empty-state">加载失败</div>';
+    });
+}
+
+function renderGroups() {
+    var groups = [...new Set(watchlistData.map(s=>s.groupName||'默认分组'))];
+    var html = '<span class="group-tab '+(currentGroup==='all'?'active':'')+'" onclick="filterGroup(\'all\')">全部 ('+watchlistData.length+')</span>';
+    groups.forEach(g=>{
+        var count = watchlistData.filter(s=>(s.groupName||'默认分组')===g).length;
+        html += '<span class="group-tab '+(currentGroup===g?'active':'')+'" onclick="filterGroup(\''+g+'\')">'+g+' ('+count+')</span>';
+    });
+    document.getElementById('groupTabs').innerHTML = html;
+}
+
+function filterGroup(group) {
+    currentGroup = group;
+    renderGroups();
+    renderList();
+}
+
+function renderList() {
+    var list = currentGroup==='all' ? watchlistData : watchlistData.filter(s=>(s.groupName||'默认分组')===currentGroup);
+    if(!list.length) {
+        document.getElementById('stockList').innerHTML = '<div class="empty-state">暂无自选股，点击上方添加</div>';
+        return;
+    }
+    document.getElementById('stockList').innerHTML = list.map(s=>{
+        var rate = parseFloat(s.changeRate)||0;
+        var cls = rate>=0?'up':'down';
+        var market = s.market||'A';
+        return '<div class="stock-row" onclick="viewStock(\''+s.stockCode+'\')">'+
+            '<div class="stock-info">'+
+                '<div class="stock-name">'+(s.stockName||s.stockCode)+' <span style="font-size:10px;color:var(--text2)">'+market+'</span></div>'+
+                '<div class="stock-code">'+s.stockCode+' · '+(s.groupName||'默认分组')+'</div>'+
+            '</div>'+
+            (s.price?'<div class="stock-price"><div class="price">'+s.price+'</div><div class="change '+cls+'">'+(rate>=0?'+':'')+rate+'%</div></div>':'')+
+            '<div class="stock-actions"><button class="btn btn-sm btn-danger" onclick="event.stopPropagation();removeStock('+s.id+')">删除</button></div>'+
+        '</div>';
+    }).join('');
+}
+
+function addStock() {
+    var code = document.getElementById('addInput').value.trim();
+    if(!code) return;
+    fetch('/api/watchlist/add',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({stockCode:code})
+    }).then(r=>r.json()).then(data=>{
+        if(data.success) {
+            document.getElementById('addInput').value='';
+            loadWatchlist();
+        } else {
+            alert(data.message||'添加失败');
+        }
+    });
+}
+
+function removeStock(id) {
+    if(!confirm('确定删除？')) return;
+    fetch('/api/watchlist/remove/'+id,{method:'DELETE'}).then(r=>r.json()).then(data=>{
+        if(data.success) loadWatchlist();
+    });
+}
+
+function showBatchModal() { document.getElementById('batchModal').classList.add('show'); }
+function closeBatchModal() { document.getElementById('batchModal').classList.remove('show'); }
+
+function batchAdd() {
+    var codes = document.getElementById('batchCodes').value.trim();
+    var group = document.getElementById('batchGroup').value.trim()||'默认分组';
+    if(!codes) return;
+    fetch('/api/watchlist/batch-add',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({codes:codes,groupName:group})
+    }).then(r=>r.json()).then(data=>{
+        if(data.success) {
+            closeBatchModal();
+            document.getElementById('batchCodes').value='';
+            loadWatchlist();
+        }
+    });
+}
+
+function viewStock(code) {
+    window.location.href='/#'+code;
+}
+    </script>
+</body>
+</html>
