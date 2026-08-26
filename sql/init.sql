@@ -105,3 +105,45 @@ INSERT IGNORE INTO stock_info (stock_code, stock_name, market, industry) VALUES
 ('603501','韦尔股份','SH','半导体'),('601012','隆基绿能','SH','光伏'),('600050','中国联通','SH','通信'),
 ('601728','中国电信','SH','通信'),('002714','牧原股份','SZ','养殖'),('002304','洋河股份','SZ','白酒'),
 ('300661','圣邦股份','SZ','半导体'),('600089','特变电工','SH','电力设备'),('600028','中国石化','SH','石油');
+
+-- 决策信号表
+CREATE TABLE IF NOT EXISTS decision_signal (
+    id VARCHAR(36) PRIMARY KEY,
+    stock_code VARCHAR(20) NOT NULL,
+    stock_name VARCHAR(50),
+    action VARCHAR(20) NOT NULL COMMENT 'BUY/SELL/HOLD等',
+    confidence DOUBLE DEFAULT 0,
+    score DOUBLE DEFAULT 0,
+    entry_price DECIMAL(10,2),
+    entry_range_high DECIMAL(10,2),
+    entry_range_low DECIMAL(10,2),
+    stop_loss DECIMAL(10,2),
+    target_price DECIMAL(10,2),
+    time_window VARCHAR(20) DEFAULT 'intraday',
+    status VARCHAR(20) DEFAULT 'ACTIVE',
+    source_analysis TEXT,
+    guardrail_reason VARCHAR(200),
+    expires_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_stock_code (stock_code),
+    INDEX idx_status (status),
+    INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='决策信号表';
+
+-- 股票预警表
+CREATE TABLE IF NOT EXISTS stock_alert (
+    id VARCHAR(36) PRIMARY KEY,
+    stock_code VARCHAR(20) NOT NULL,
+    stock_name VARCHAR(50),
+    alert_type VARCHAR(30) NOT NULL,
+    threshold DOUBLE,
+    enabled BOOLEAN DEFAULT TRUE,
+    last_triggered_at DATETIME,
+    cooldown_minutes INT DEFAULT 60,
+    message VARCHAR(500),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_stock_code (stock_code),
+    INDEX idx_enabled (enabled)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='股票预警表';

@@ -15,7 +15,7 @@ import java.util.*;
 
 /**
  * 回测服务
- * 支持：均线策略、买入持有策略
+ * 支持：均线策略、买入持有策略、RSI策略、MACD策略、布林带策略、信号评估
  * 数据源：腾讯行情API（免费）
  */
 import lombok.RequiredArgsConstructor;
@@ -32,6 +32,7 @@ public class BacktestService {
     private int httpTimeout;
 
     private final StockService stockService;
+    private final TechnicalIndicatorService technicalIndicatorService;
 
     public BacktestResultDTO backtestMovingAverage(String stockCode, int shortPeriod, int longPeriod,
                                                    String startDate, String endDate, BigDecimal initialCapital) {
@@ -82,6 +83,288 @@ public class BacktestService {
         result.setTradeCount(2);
         result.setWinCount(profit.compareTo(BigDecimal.ZERO) > 0 ? 1 : 0);
         result.setWinRate(profit.compareTo(BigDecimal.ZERO) > 0 ? BigDecimal.valueOf(100) : BigDecimal.ZERO);
+        return result;
+    }
+
+    // ======================== RSI 策略回测 ========================
+    public BacktestResultDTO backtestRSI(String stockCode, int period, double overbought, double oversold,
+                                         String startDate, String endDate, BigDecimal initialCapital) {
+        if (StrUtil.isBlank(stockCode)) {
+            throw new IllegalArgumentException("股票代码不能为空");
+        }
+        if (period <= 0 || overbought <= oversold) {
+            throw new IllegalArgumentException("RSI参数不合法：周期应大于0，超买线应大于超卖线");
+        }
+
+        List<Map<String, Object>> klines = fetchKlineData(stockCode, startDate, endDate);
+        if (klines.isEmpty() || klines.size() < period + 1) {
+            return createEmptyResult("RSI策略", stockCode, "数据不足，需要至少" + (period + 1) + "个交易日");
+        }
+
+        // 提取收盘价并计算RSI
+        double[] closePrices = new double[klines.size()];
+        for (int i = 0; i < klines.size(); i++) {
+            closePrices[i] = getClosePrice(klines.get(i)).doubleValue();
+        }
+        double[] rsiValues = technicalIndicatorService.rsi(closePrices, period);
+
+        // 生成买卖信号：RSI上穿超卖线买入，下穿超买线卖出
+        boolean[] buySignals = new boolean[klines.size()];
+        boolean[] sellSignals = new boolean[klines.size()];
+        for (int i = 1; i < klines.size(); i++) {
+            if (!Double.isNaN(rsiValues[i]) && !Double.isNaN(rsiValues[i - 1])) {
+                if (rsiValues[i - 1] <= oversold && rsiValues[i] > oversold) {
+                    buySignals[i] = true;
+                }
+                if (rsiValues[i - 1] >= overbought && rsiValues[i] < overbought) {
+                    sellSignals[i] = true;
+                }
+            }
+        }
+
+        BacktestResultDTO result = new BacktestResultDTO();
+        result.setStrategyName("RSI策略（周期" + period + "，超买" + overbought + "/超卖" + oversold + "）");
+        result.setStockCode(stockCode);
+        result.setPeriod(startDate + " ~ " + endDate);
+        result.setInitialCapital(initialCapital);
+        result.setDescription("RSI上穿" + oversold + "买入，下穿" + overbought + "卖出");
+
+        return runGenericBacktest(klines, buySignals, sellSignals, initialCapital, result);
+    }
+
+    // ======================== MACD 策略回测 ========================
+    public BacktestResultDTO backtestMACD(String stockCode, String startDate, String endDate, BigDecimal initialCapital) {
+        if (StrUtil.isBlank(stockCode)) {
+            throw new IllegalArgumentException("股票代码不能为空");
+        }
+
+        List<Map<String, Object>> klines = fetchKlineData(stockCode, startDate, endDate);
+        if (klines.isEmpty() || klines.size() < 35) {
+            return createEmptyResult("MACD策略", stockCode, "数据不足，MACD需要至少35个交易日");
+        }
+
+        // 提取收盘价并计算MACD (12, 26, 9)
+        double[] closePrices = new double[klines.size()];
+        for (int i = 0; i < klines.size(); i++) {
+            closePrices[i] = getClosePrice(klines.get(i)).doubleValue();
+        }
+        List<double[]> macdValues = technicalIndicatorService.macd(closePrices, 12, 26, 9);
+
+        // 生成买卖信号：DIF上穿DEA买入（金叉），DIF下穿DEA卖出（死叉）
+        boolean[] buySignals = new boolean[klines.size()];
+        boolean[] sellSignals = new boolean[klines.size()];
+        for (int i = 1; i < macdValues.size(); i++) {
+            double[] prev = macdValues.get(i - 1);
+            double[] curr = macdValues.get(i);
+            if (Double.isNaN(prev[0]) || Double.isNaN(prev[1]) || Double.isNaN(curr[0]) || Double.isNaN(curr[1])) {
+                continue;
+            }
+            // 金叉：DIF从下方穿越DEA
+            if (prev[0] <= prev[1] && curr[0] > curr[1]) {
+                buySignals[i] = true;
+            }
+            // 死叉：DIF从上方穿越DEA
+            if (prev[0] >= prev[1] && curr[0] < curr[1]) {
+                sellSignals[i] = true;
+            }
+        }
+
+        BacktestResultDTO result = new BacktestResultDTO();
+        result.setStrategyName("MACD策略（12/26/9）");
+        result.setStockCode(stockCode);
+        result.setPeriod(startDate + " ~ " + endDate);
+        result.setInitialCapital(initialCapital);
+        result.setDescription("DIF上穿DEA（金叉）买入，下穿DEA（死叉）卖出");
+
+        return runGenericBacktest(klines, buySignals, sellSignals, initialCapital, result);
+    }
+
+    // ======================== 布林带策略回测 ========================
+    public BacktestResultDTO backtestBollinger(String stockCode, int period, double multiplier,
+                                               String startDate, String endDate, BigDecimal initialCapital) {
+        if (StrUtil.isBlank(stockCode)) {
+            throw new IllegalArgumentException("股票代码不能为空");
+        }
+        if (period <= 0 || multiplier <= 0) {
+            throw new IllegalArgumentException("布林带参数不合法：周期和标准差倍数应大于0");
+        }
+
+        List<Map<String, Object>> klines = fetchKlineData(stockCode, startDate, endDate);
+        if (klines.isEmpty() || klines.size() < period) {
+            return createEmptyResult("布林带策略", stockCode, "数据不足，需要至少" + period + "个交易日");
+        }
+
+        // 提取收盘价并计算布林带
+        double[] closePrices = new double[klines.size()];
+        for (int i = 0; i < klines.size(); i++) {
+            closePrices[i] = getClosePrice(klines.get(i)).doubleValue();
+        }
+        double[][] bollValues = technicalIndicatorService.bollinger(closePrices, period, multiplier);
+        double[] upper = bollValues[0]; // 上轨
+        double[] lower = bollValues[2]; // 下轨
+
+        // 生成买卖信号：价格触及下轨买入，触及上轨卖出
+        boolean[] buySignals = new boolean[klines.size()];
+        boolean[] sellSignals = new boolean[klines.size()];
+        for (int i = period - 1; i < klines.size(); i++) {
+            if (Double.isNaN(upper[i]) || Double.isNaN(lower[i])) continue;
+            if (closePrices[i] <= lower[i]) {
+                buySignals[i] = true;
+            }
+            if (closePrices[i] >= upper[i]) {
+                sellSignals[i] = true;
+            }
+        }
+
+        BacktestResultDTO result = new BacktestResultDTO();
+        result.setStrategyName("布林带策略（周期" + period + "，倍数" + multiplier + "）");
+        result.setStockCode(stockCode);
+        result.setPeriod(startDate + " ~ " + endDate);
+        result.setInitialCapital(initialCapital);
+        result.setDescription("价格触及下轨买入，触及上轨卖出");
+
+        return runGenericBacktest(klines, buySignals, sellSignals, initialCapital, result);
+    }
+
+    // ======================== 信号评估回测 ========================
+    public Map<String, Object> backtestSignalEvaluation(String stockCode, double entryPrice, double targetPrice,
+                                                         double stopLoss, String startDate, String endDate) {
+        Map<String, Object> evalResult = new LinkedHashMap<>();
+        if (StrUtil.isBlank(stockCode)) {
+            throw new IllegalArgumentException("股票代码不能为空");
+        }
+
+        List<Map<String, Object>> klines = fetchKlineData(stockCode, startDate, endDate);
+        if (klines.isEmpty()) {
+            evalResult.put("signalCorrect", false);
+            evalResult.put("maxGain", 0.0);
+            evalResult.put("maxLoss", 0.0);
+            evalResult.put("hitTarget", false);
+            evalResult.put("hitStopLoss", false);
+            evalResult.put("description", "无历史数据");
+            return evalResult;
+        }
+
+        double maxGain = 0.0;
+        double maxLoss = 0.0;
+        boolean hitTarget = false;
+        boolean hitStopLoss = false;
+
+        for (Map<String, Object> kline : klines) {
+            double high = getClosePrice(kline).doubleValue();
+            double low = getClosePrice(kline).doubleValue();
+            try {
+                if (kline.get("high") != null) high = Double.parseDouble(kline.get("high").toString());
+                if (kline.get("low") != null) low = Double.parseDouble(kline.get("low").toString());
+            } catch (Exception ignored) {}
+
+            double gainFromHigh = (high - entryPrice) / entryPrice * 100;
+            double lossFromLow = (entryPrice - low) / entryPrice * 100;
+            if (gainFromHigh > maxGain) maxGain = gainFromHigh;
+            if (lossFromLow > maxLoss) maxLoss = lossFromLow;
+
+            if (high >= targetPrice) hitTarget = true;
+            if (low <= stopLoss) hitStopLoss = true;
+        }
+
+        // 信号正确性判断
+        boolean signalCorrect = hitTarget && !hitStopLoss;
+        if (hitTarget && hitStopLoss) {
+            double lastClose = getClosePrice(klines.get(klines.size() - 1)).doubleValue();
+            signalCorrect = lastClose >= entryPrice;
+        }
+
+        evalResult.put("signalCorrect", signalCorrect);
+        evalResult.put("maxGain", BigDecimal.valueOf(maxGain).setScale(2, RoundingMode.HALF_UP).doubleValue());
+        evalResult.put("maxLoss", BigDecimal.valueOf(maxLoss).setScale(2, RoundingMode.HALF_UP).doubleValue());
+        evalResult.put("hitTarget", hitTarget);
+        evalResult.put("hitStopLoss", hitStopLoss);
+        evalResult.put("entryPrice", entryPrice);
+        evalResult.put("targetPrice", targetPrice);
+        evalResult.put("stopLoss", stopLoss);
+        evalResult.put("dataRange", klines.get(0).get("date") + " ~ " + klines.get(klines.size() - 1).get("date"));
+        return evalResult;
+    }
+
+    // ======================== 通用回测执行引擎 ========================
+    /**
+     * 通用回测执行：根据买卖信号数组执行回测，计算收益、回撤等指标
+     */
+    private BacktestResultDTO runGenericBacktest(List<Map<String, Object>> klines, boolean[] buySignals,
+                                                 boolean[] sellSignals, BigDecimal initialCapital,
+                                                 BacktestResultDTO result) {
+        BigDecimal cash = initialCapital;
+        int shares = 0;
+        int tradeCount = 0;
+        int winCount = 0;
+        BigDecimal maxNav = initialCapital;
+        BigDecimal maxDrawdown = BigDecimal.ZERO;
+        List<Map<String, Object>> dailyNav = new ArrayList<>();
+        BigDecimal buyPrice = null;
+
+        for (int i = 0; i < klines.size(); i++) {
+            BigDecimal closePrice = getClosePrice(klines.get(i));
+            String date = getDate(klines.get(i));
+
+            // 执行买入信号
+            if (buySignals[i] && shares == 0) {
+                int buyShares = cash.divide(closePrice, 0, RoundingMode.DOWN).intValue();
+                if (buyShares > 0) {
+                    cash = cash.subtract(closePrice.multiply(BigDecimal.valueOf(buyShares)));
+                    shares = buyShares;
+                    buyPrice = closePrice;
+                    tradeCount++;
+                }
+            }
+
+            // 执行卖出信号
+            if (sellSignals[i] && shares > 0) {
+                BigDecimal sellAmount = closePrice.multiply(BigDecimal.valueOf(shares));
+                if (buyPrice != null && closePrice.compareTo(buyPrice) > 0) {
+                    winCount++;
+                }
+                cash = cash.add(sellAmount);
+                shares = 0;
+                buyPrice = null;
+                tradeCount++;
+            }
+
+            // 计算每日净值
+            BigDecimal nav = cash.add(closePrice.multiply(BigDecimal.valueOf(shares)));
+            if (nav.compareTo(maxNav) > 0) maxNav = nav;
+            BigDecimal drawdown = maxNav.subtract(nav).multiply(BigDecimal.valueOf(100))
+                    .divide(maxNav, 2, RoundingMode.HALF_UP);
+            if (drawdown.compareTo(maxDrawdown) > 0) maxDrawdown = drawdown;
+
+            Map<String, Object> navPoint = new HashMap<>();
+            navPoint.put("date", date);
+            navPoint.put("nav", nav.setScale(2, RoundingMode.HALF_UP));
+            dailyNav.add(navPoint);
+        }
+
+        // 未平仓头寸按最后价格强制平仓
+        if (shares > 0) {
+            BigDecimal lastPrice = getClosePrice(klines.get(klines.size() - 1));
+            if (buyPrice != null && lastPrice.compareTo(buyPrice) > 0) {
+                winCount++;
+            }
+            cash = cash.add(lastPrice.multiply(BigDecimal.valueOf(shares)));
+            tradeCount++;
+        }
+
+        result.setFinalCapital(cash);
+        result.setTotalReturn(cash.subtract(initialCapital)
+                .multiply(BigDecimal.valueOf(100)).divide(initialCapital, 2, RoundingMode.HALF_UP));
+        result.setTradeCount(tradeCount);
+        int roundTrips = tradeCount / 2;
+        result.setWinCount(winCount);
+        if (roundTrips > 0) {
+            result.setWinRate(BigDecimal.valueOf(winCount * 100.0 / roundTrips)
+                    .setScale(1, RoundingMode.HALF_UP));
+        }
+        result.setMaxDrawdown(maxDrawdown);
+        result.setDailyNav(dailyNav.size() > 100
+                ? dailyNav.subList(dailyNav.size() - 100, dailyNav.size()) : dailyNav);
         return result;
     }
 

@@ -25,11 +25,14 @@ class BacktestServiceTest {
     @Mock
     private StockService stockService;
 
+    @Mock
+    private TechnicalIndicatorService technicalIndicatorService;
+
     private BacktestService backtestService;
 
     @BeforeEach
     void setUp() {
-        backtestService = new BacktestService(stockService);
+        backtestService = new BacktestService(stockService, technicalIndicatorService);
         ReflectionTestUtils.setField(backtestService, "httpTimeout", 10000);
     }
 
