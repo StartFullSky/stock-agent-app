@@ -35,16 +35,16 @@ public class HithinkFinanceService {
     private final StringRedisTemplate redisTemplate;
 
     @Value("${hithink.enabled:true}")
-    private boolean enabled;
+    private boolean enabled = true;
 
     @Value("${hithink.base-url:https://fuyao.aicubes.cn}")
-    private String baseUrl;
+    private String baseUrl = "https://fuyao.aicubes.cn";
 
     @Value("${hithink.api-key:}")
     private String apiKey;
 
     @Value("${hithink.timeout:8000}")
-    private int timeout;
+    private int timeout = 8000;
 
     private static final String CACHE_PREFIX_TICKER = "stock:thscode:";
     private static final long TICKER_CACHE_TTL_DAYS = 7;
