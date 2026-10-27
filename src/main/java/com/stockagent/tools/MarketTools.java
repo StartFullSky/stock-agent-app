@@ -1,6 +1,9 @@
 package com.stockagent.tools;
 
+import cn.hutool.core.util.StrUtil;
 import com.stockagent.service.StockService;
+import com.stockagent.service.HithinkFinanceService;
+import com.stockagent.service.SpecialDataService;
 import com.stockagent.dto.StockQuoteDTO;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
@@ -17,6 +20,8 @@ import java.util.Map;
 public class MarketTools {
 
     private final StockService stockService;
+    private final HithinkFinanceService hithink;
+    private final SpecialDataService specialData;
 
     @Tool("查询股票实时行情，支持A股、美股、港股。A股用6位代码如600519，美股用字母代码如AAPL/TSLA，港股用5位代码如00700")
     public String getStockQuote(@P("股票代码，如600519、AAPL、TSLA、00700") String stockCode) {
@@ -115,6 +120,130 @@ public class MarketTools {
             log.error("搜索股票失败", e);
             return "搜索暂时不可用，请稍后重试";
         }
+    }
+
+    @Tool("查询A股估值快照：市盈率(PE_TTM/PE_MRQ)、市净率(PB)、市销率(PS)、市现率(PCF)。输入股票代码或名称")
+    public String getValuation(@P("股票代码或名称，如600519、贵州茅台") String stockCode) {
+        log.info("查询估值: {}", stockCode);
+        try {
+            HithinkFinanceService.TickerInfo t = resolveA(stockCode);
+            if (t == null) return "未找到该股票，请检查代码是否正确";
+            Map<String, Object> v = specialData.valuation(t.thscode);
+            if (v.isEmpty()) return "暂无估值数据";
+            return String.format("【%s 估值】%s (%s)\nPE(TTM): %s | PE(MRQ): %s\nPB(MRQ): %s | PS(TTM): %s | PCF(TTM): %s",
+                v.get("name"), t.name, t.thscode, fmt(v.get("peTtm")), fmt(v.get("peMrq")),
+                fmt(v.get("pbMrq")), fmt(v.get("psTtm")), fmt(v.get("pcfTtm")));
+        } catch (Exception e) {
+            log.error("查询估值失败", e);
+            return "查询估值暂时不可用，请稍后重试";
+        }
+    }
+
+    @Tool("查询A股财务指标（成长/盈利/偿债/营运/现金流五类）。报告期格式：2025-1一季报、2025-2半年报、2025-3三季报、2025-4年报")
+    public String getFinancialIndicators(@P("股票代码或名称，如600519") String stockCode, @P("报告期，如2025-3") String report) {
+        log.info("查询财务指标: {} {}", stockCode, report);
+        try {
+            HithinkFinanceService.TickerInfo t = resolveA(stockCode);
+            if (t == null) return "未找到该股票，请检查代码是否正确";
+            String text = specialData.financialIndicatorsText(t.thscode, report);
+            return text.isEmpty() ? "暂无该报告期财务数据" : String.format("【%s 财务指标】\n%s", t.name, text);
+        } catch (Exception e) {
+            log.error("查询财务指标失败", e);
+            return "查询财务指标暂时不可用，请稍后重试";
+        }
+    }
+
+    @Tool("今日涨停复盘：涨停股票池（含连板数、封单额、涨停原因、涨停时间）。日期可选，格式YYYY-MM-DD，空为今日")
+    public String getLimitUpReview(@P("日期YYYY-MM-DD，可空表示今日") String date) {
+        log.info("涨停复盘: {}", date);
+        try {
+            Map<String, Object> pool = specialData.limitUpPool(date, 50);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) pool.get("items");
+            if (items.isEmpty()) return "暂无涨停数据（可能非交易日或数据未就绪）";
+            StringBuilder sb = new StringBuilder();
+            sb.append(String.format("【涨停复盘】共 %s 只涨停，显示前 %d 只\n\n", pool.get("total"), Math.min(items.size(), 20)));
+            for (int i = 0; i < Math.min(items.size(), 20); i++) {
+                Map<String, Object> m = items.get(i);
+                sb.append(String.format("%d. %s(%s) %s | 封单:%s | %s | %s\n", i + 1,
+                    m.get("name"), m.get("thscode"), m.get("continueDayText"),
+                    fmt(m.get("sealMoney")), m.get("limitUpTime"),
+                    m.get("limitUpReason") == null ? "" : m.get("limitUpReason")));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.error("涨停复盘失败", e);
+            return "涨停复盘暂时不可用，请稍后重试";
+        }
+    }
+
+    @Tool("A股热股榜Top30（市场关注度排行）。飙升榜=true 返回热度飙升榜")
+    public String getHotStocks(@P("是否查飙升榜，默认false") boolean skyrocket) {
+        log.info("热股榜: skyrocket={}", skyrocket);
+        try {
+            List<Map<String, Object>> items = specialData.hotStockList("day", skyrocket);
+            if (items.isEmpty()) return "暂无热股榜数据";
+            StringBuilder sb = new StringBuilder(skyrocket ? "【热度飙升榜 Top30】\n" : "【A股热股榜 Top30】\n");
+            for (Map<String, Object> m : items) {
+                sb.append(String.format("%s. %s(%s) 热度:%s\n", m.get("rank"), m.get("name"), m.get("thscode"), m.get("heat")));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.error("热股榜失败", e);
+            return "热股榜暂时不可用，请稍后重试";
+        }
+    }
+
+    @Tool("查询个股异动原因（如涨停、大涨、大跌的官方解释）。输入股票代码或名称")
+    public String getAnomalyReasons(@P("股票代码或名称，如600519") String stockCode) {
+        log.info("异动原因: {}", stockCode);
+        try {
+            HithinkFinanceService.TickerInfo t = resolveA(stockCode);
+            if (t == null) return "未找到该股票，请检查代码是否正确";
+            List<Map<String, Object>> items = specialData.anomalyByStock(t.thscode);
+            if (items.isEmpty()) return "近期无异动记录";
+            StringBuilder sb = new StringBuilder(String.format("【%s 异动记录】\n", t.name));
+            for (Map<String, Object> m : items) {
+                sb.append(m.toString()).append('\n');
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.error("异动原因失败", e);
+            return "异动原因暂时不可用，请稍后重试";
+        }
+    }
+
+    @Tool("龙虎榜查询（机构/游资席位上榜）。日期可选YYYY-MM-DD，类型：all全部/org机构榜/hot_money游资榜")
+    public String getDragonTiger(@P("日期YYYY-MM-DD，可空表示最近交易日") String date, @P("榜单类型：all/org/hot_money") String boardType) {
+        log.info("龙虎榜: {} {}", date, boardType);
+        try {
+            Map<String, Object> r = specialData.dragonTiger(date, boardType);
+            if (r.isEmpty()) return "暂无龙虎榜数据";
+            StringBuilder sb = new StringBuilder(String.format("【龙虎榜】%s (%s) 共%s只\n\n", r.get("tradeDate"), r.get("boardType"), r.get("stockCount")));
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> stocks = (List<Map<String, Object>>) r.get("stocks");
+            for (int i = 0; i < Math.min(stocks.size(), 15); i++) {
+                Map<String, Object> m = stocks.get(i);
+                sb.append(String.format("%d. %s(%s) 净买额:%s\n", i + 1, m.get("name"), m.get("thscode"), m.get("net_value")));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.error("龙虎榜失败", e);
+            return "龙虎榜暂时不可用，请稍后重试";
+        }
+    }
+
+    /** 消歧为A股/指数标的（同花顺 meta 检索） */
+    private HithinkFinanceService.TickerInfo resolveA(String codeOrName) {
+        if (!hithink.isAvailable()) return null;
+        HithinkFinanceService.TickerInfo t = hithink.resolveTicker(codeOrName, null);
+        if (t == null || StrUtil.isBlank(t.thscode)) return null;
+        if (!t.isAShare() && !t.isIndex()) return null;
+        return t;
+    }
+
+    private String fmt(Object v) {
+        return v == null ? "未披露" : v.toString();
     }
 
     private String detectMarket(String code) {

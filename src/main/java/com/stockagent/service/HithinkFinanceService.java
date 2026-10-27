@@ -370,6 +370,37 @@ public class HithinkFinanceService {
 
     /** ---------- 日期工具 ---------- */
 
+    /** ---------- 估值 / 财务 / 特色数据 ---------- */
+
+    /** A股估值快照（PE_TTM/PE_MRQ/PB/PS/PCF），null 表示未披露，不补零 */
+    public List<JSONObject> valuationSnapshot(List<String> thscodes) {
+        List<JSONObject> results = new ArrayList<>();
+        if (thscodes == null || thscodes.isEmpty()) return results;
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("thscodes", String.join(",", thscodes));
+        JSONObject data = request("/api/a-share/valuations/snapshot", params);
+        if (data == null) return results;
+        JSONArray items = data.getJSONArray("item");
+        if (items == null) return results;
+        for (int i = 0; i < items.size(); i++) {
+            results.add(items.getJSONObject(i));
+        }
+        return results;
+    }
+
+    /** 财务指标（成长/盈利/偿债/营运/现金流五类），report 形如 2025-1/2025-2/2025-3/2025-4 */
+    public JSONObject financialIndicators(String thscode, String report) {
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("thscode", thscode);
+        params.put("report", report);
+        return request("/api/a-share/financials/indicators", params);
+    }
+
+    /** 特色数据（涨停池/热榜/龙虎榜等），返回完整 data（含 pagination），失败返回 null */
+    public JSONObject specialData(String path, Map<String, String> params) {
+        return request(path, params);
+    }
+
     public static long toStartOfDayMs(String yyyyMMdd) {
         LocalDate d = LocalDate.parse(yyyyMMdd);
         return d.atStartOfDay(CN_ZONE).toInstant().toEpochMilli();

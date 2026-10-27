@@ -292,6 +292,17 @@ public class StockService {
         dto.setPreClose(HithinkFinanceService.numBD(o.get("prev_price")));
         dto.setVolume(HithinkFinanceService.numLong(o.get("volume")));
         dto.setAmount(HithinkFinanceService.numBD(o.get("turnover")));
+        // 估值补充（仅个股，PE_TTM；未披露为 null 不补零）
+        if (t.isAShare()) {
+            try {
+                List<JSONObject> vals = hithink.valuationSnapshot(Collections.singletonList(t.thscode));
+                if (!vals.isEmpty()) {
+                    dto.setPeRatio(HithinkFinanceService.numBD(vals.get(0).get("pe_ttm")));
+                }
+            } catch (Exception e) {
+                log.warn("估值补充失败 {}: {}", t.thscode, e.getMessage());
+            }
+        }
         return dto;
     }
 
