@@ -29,6 +29,7 @@ public class StockService {
 
     private final StockInfoMapper stockInfoMapper;
     private final StringRedisTemplate redisTemplate;
+    private final HithinkFinanceService hithink;
 
     @Value("${cache.quote-ttl:10}")
     private long quoteTtl;
@@ -74,6 +75,24 @@ public class StockService {
             return JSONUtil.toList(cached, StockSearchDTO.class);
         }
 
+        // 主数据源：同花顺标的检索（准确消歧）
+        try {
+            List<Map<String, String>> tickers = hithink.searchTickers(keyword, "a-share", 20);
+            if (!tickers.isEmpty()) {
+                List<StockSearchDTO> result = tickers.stream().map(r -> {
+                    StockSearchDTO dto = new StockSearchDTO();
+                    dto.setStockCode(r.get("code"));
+                    dto.setStockName(r.get("name"));
+                    dto.setMarket("A股");
+                    return dto;
+                }).collect(Collectors.toList());
+                redisTemplate.opsForValue().set(cacheKey, JSONUtil.toJsonStr(result), searchTtl, TimeUnit.SECONDS);
+                return result;
+            }
+        } catch (Exception e) {
+            log.warn("同花顺搜索失败，回退本地代码表: {}", e.getMessage());
+        }
+
         LambdaQueryWrapper<StockInfo> wrapper = new LambdaQueryWrapper<>();
         wrapper.and(w -> w.like(StockInfo::getStockCode, keyword).or().like(StockInfo::getStockName, keyword))
                .eq(StockInfo::getStatus, 1).last("LIMIT 20");
@@ -97,7 +116,11 @@ public class StockService {
         }
 
         try {
-            StockQuoteDTO dto = fetchQuote(stockCode);
+            // 主数据源：同花顺行情快照（A股/指数）；美股/港股不支持时回退腾讯
+            StockQuoteDTO dto = fetchQuoteHithink(stockCode);
+            if (dto == null || "未知".equals(dto.getStockName())) {
+                dto = fetchQuote(stockCode);
+            }
             if (dto != null && !"未知".equals(dto.getStockName())) {
                 redisTemplate.opsForValue().set(cacheKey, JSONUtil.toJsonStr(dto), quoteTtl, TimeUnit.SECONDS);
                 return dto;
@@ -115,6 +138,20 @@ public class StockService {
             return parseMapList(cached);
         }
 
+        // 主数据源：同花顺指数行情快照（一次批量）
+        List<Map<String, Object>> results = fetchMainIndicesHithink();
+
+        if (results.isEmpty()) {
+            results = fetchMainIndicesTencent();
+        }
+
+        if (!results.isEmpty()) {
+            redisTemplate.opsForValue().set(cacheKey, JSONUtil.toJsonStr(results), quoteTtl, TimeUnit.SECONDS);
+        }
+        return results;
+    }
+
+    private List<Map<String, Object>> fetchMainIndicesTencent() {
         List<Map<String, Object>> results = new ArrayList<>();
         for (Map.Entry<String, String> entry : INDEX_MAP.entrySet()) {
             try {
@@ -129,10 +166,6 @@ public class StockService {
                     results.add(item);
                 }
             } catch (Exception e) { log.warn("获取指数行情失败 {}", entry.getKey(), e); }
-        }
-
-        if (!results.isEmpty()) {
-            redisTemplate.opsForValue().set(cacheKey, JSONUtil.toJsonStr(results), quoteTtl, TimeUnit.SECONDS);
         }
         return results;
     }
@@ -149,27 +182,12 @@ public class StockService {
             String sinaCode = toTencentCode(stockCode);
             if (sinaCode.startsWith("us") || sinaCode.startsWith("hk")) return results;
 
-            int dataLen = Math.max(limit, 365);
-            String url = SINA_KLINE_URL + "?symbol=" + sinaCode + "&scale=240&ma=no&datalen=" + dataLen;
-            log.info("请求K线: {}", url);
-            String response = HttpUtil.get(url, httpTimeoutKline);
-            if (StrUtil.isBlank(response)) { log.warn("K线响应为空"); return results; }
-
-            JSONArray arr = JSONUtil.parseArray(response);
-            if (arr == null || arr.isEmpty()) { log.warn("K线JSON解析为空"); return results; }
-
-            List<Map<String, Object>> allData = new ArrayList<>();
-            for (int i = 0; i < arr.size(); i++) {
-                JSONObject obj = arr.getJSONObject(i);
-                Map<String, Object> kline = new LinkedHashMap<>();
-                kline.put("date", obj.getStr("day"));
-                kline.put("open", obj.getStr("open"));
-                kline.put("close", obj.getStr("close"));
-                kline.put("high", obj.getStr("high"));
-                kline.put("low", obj.getStr("low"));
-                kline.put("volume", obj.getStr("volume"));
-                allData.add(kline);
+            // 主数据源：同花顺历史K线（默认前复权）
+            List<Map<String, Object>> allData = fetchKlineHithink(stockCode, startDate, endDate, limit);
+            if (allData.isEmpty()) {
+                allData = fetchKlineSina(sinaCode, limit);
             }
+            if (allData.isEmpty()) { log.warn("K线数据为空"); return results; }
 
             // 按日期过滤
             List<Map<String, Object>> filtered = allData;
@@ -240,6 +258,135 @@ public class StockService {
             } catch (Exception e) { log.warn("港股搜索失败", e); }
         }
         return results;
+    }
+
+    /** 是否美股/港股代码（同花顺公开接口不支持，走腾讯兜底） */
+    private boolean isUsHkCode(String code) {
+        if (code == null) return false;
+        String c = code.trim();
+        String low = c.toLowerCase();
+        if (low.startsWith("us") || low.startsWith("hk")) return true;
+        if (c.matches("[A-Za-z]{1,5}")) return true;
+        return c.matches("\\d{5}");
+    }
+
+    /** 同花顺行情快照（A股/指数），不支持或失败返回 null */
+    private StockQuoteDTO fetchQuoteHithink(String stockCode) {
+        if (!hithink.isAvailable() || isUsHkCode(stockCode)) return null;
+        String hint = INDEX_MAP.containsKey(stockCode) ? "a-share-index" : null;
+        HithinkFinanceService.TickerInfo t = hithink.resolveTicker(stockCode, hint);
+        if (t == null || StrUtil.isBlank(t.thscode)) return null;
+        if (!t.isAShare() && !t.isIndex()) return null;
+        List<JSONObject> items = hithink.snapshot(Collections.singletonList(t.thscode), t.isIndex());
+        if (items.isEmpty()) return null;
+        JSONObject o = items.get(0);
+        StockQuoteDTO dto = new StockQuoteDTO();
+        dto.setStockCode(stockCode);
+        dto.setStockName(StrUtil.blankToDefault(t.name, stockCode));
+        dto.setCurrentPrice(HithinkFinanceService.numBD(o.get("last_price")));
+        dto.setChangeAmount(HithinkFinanceService.numBD(o.get("price_change")));
+        dto.setChangeRate(HithinkFinanceService.numBD(o.get("price_change_ratio_pct")));
+        dto.setOpenPrice(HithinkFinanceService.numBD(o.get("open_price")));
+        dto.setHighPrice(HithinkFinanceService.numBD(o.get("high_price")));
+        dto.setLowPrice(HithinkFinanceService.numBD(o.get("low_price")));
+        dto.setPreClose(HithinkFinanceService.numBD(o.get("prev_price")));
+        dto.setVolume(HithinkFinanceService.numLong(o.get("volume")));
+        dto.setAmount(HithinkFinanceService.numBD(o.get("turnover")));
+        return dto;
+    }
+
+    /** 同花顺主要指数批量快照（一次请求） */
+    private List<Map<String, Object>> fetchMainIndicesHithink() {
+        List<Map<String, Object>> results = new ArrayList<>();
+        if (!hithink.isAvailable()) return results;
+        try {
+            Map<String, HithinkFinanceService.TickerInfo> byName = new LinkedHashMap<>();
+            List<String> thscodes = new ArrayList<>();
+            for (String name : INDEX_MAP.keySet()) {
+                HithinkFinanceService.TickerInfo t = hithink.resolveTicker(name, "a-share-index");
+                if (t != null && t.isIndex() && StrUtil.isNotBlank(t.thscode) && !thscodes.contains(t.thscode)) {
+                    thscodes.add(t.thscode);
+                    byName.put(name, t);
+                }
+            }
+            if (thscodes.isEmpty()) return results;
+            List<JSONObject> items = hithink.snapshot(thscodes, true);
+            Map<String, JSONObject> byCode = new LinkedHashMap<>();
+            for (JSONObject o : items) byCode.put(o.getStr("thscode"), o);
+            for (Map.Entry<String, HithinkFinanceService.TickerInfo> e : byName.entrySet()) {
+                JSONObject o = byCode.get(e.getValue().thscode);
+                if (o == null) continue;
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("name", e.getKey());
+                item.put("code", e.getValue().thscode);
+                item.put("price", HithinkFinanceService.numBD(o.get("last_price")));
+                item.put("change", HithinkFinanceService.numBD(o.get("price_change")));
+                item.put("changeRate", HithinkFinanceService.numBD(o.get("price_change_ratio_pct")));
+                results.add(item);
+            }
+        } catch (Exception e) {
+            log.warn("同花顺指数快照失败: {}", e.getMessage());
+        }
+        return results;
+    }
+
+    /** 同花顺历史K线（日线，默认前复权），失败/不支持返回空列表 */
+    private List<Map<String, Object>> fetchKlineHithink(String stockCode, String startDate, String endDate, int limit) {
+        List<Map<String, Object>> results = new ArrayList<>();
+        if (!hithink.isAvailable() || isUsHkCode(stockCode)) return results;
+        try {
+            HithinkFinanceService.TickerInfo t = hithink.resolveTicker(stockCode, null);
+            if (t == null || (!t.isAShare() && !t.isIndex())) return results;
+
+            long endMs = StrUtil.isNotBlank(endDate) ? HithinkFinanceService.toEndOfDayMs(endDate) : HithinkFinanceService.nowMs();
+            long startMs = StrUtil.isNotBlank(startDate) ? HithinkFinanceService.toStartOfDayMs(startDate)
+                    : endMs - Math.max(limit, 365) * 86_400_000L;
+            long maxSpan = 10L * 366 * 86_400_000L;
+            if (endMs - startMs > maxSpan) startMs = endMs - maxSpan;
+
+            List<JSONObject> items = t.isIndex()
+                    ? hithink.historicalIndexKline(t.thscode, startMs, endMs, "forward")
+                    : hithink.historicalKline(t.thscode, startMs, endMs, "forward");
+            for (JSONObject o : items) {
+                Map<String, Object> kline = new LinkedHashMap<>();
+                kline.put("date", HithinkFinanceService.msToDate(o.getLong("date_ms")));
+                kline.put("open", HithinkFinanceService.numStr(o.get("open_price")));
+                kline.put("close", HithinkFinanceService.numStr(o.get("close_price")));
+                kline.put("high", HithinkFinanceService.numStr(o.get("high_price")));
+                kline.put("low", HithinkFinanceService.numStr(o.get("low_price")));
+                kline.put("volume", HithinkFinanceService.numStr(o.get("volume")));
+                results.add(kline);
+            }
+        } catch (Exception e) {
+            log.warn("同花顺K线获取失败: {}", e.getMessage());
+        }
+        return results;
+    }
+
+    /** 新浪K线兜底 */
+    private List<Map<String, Object>> fetchKlineSina(String sinaCode, int limit) {
+        List<Map<String, Object>> allData = new ArrayList<>();
+        int dataLen = Math.max(limit, 365);
+        String url = SINA_KLINE_URL + "?symbol=" + sinaCode + "&scale=240&ma=no&datalen=" + dataLen;
+        log.info("请求K线(兜底): {}", url);
+        String response = HttpUtil.get(url, httpTimeoutKline);
+        if (StrUtil.isBlank(response)) { log.warn("K线响应为空"); return allData; }
+
+        JSONArray arr = JSONUtil.parseArray(response);
+        if (arr == null || arr.isEmpty()) { log.warn("K线JSON解析为空"); return allData; }
+
+        for (int i = 0; i < arr.size(); i++) {
+            JSONObject obj = arr.getJSONObject(i);
+            Map<String, Object> kline = new LinkedHashMap<>();
+            kline.put("date", obj.getStr("day"));
+            kline.put("open", obj.getStr("open"));
+            kline.put("close", obj.getStr("close"));
+            kline.put("high", obj.getStr("high"));
+            kline.put("low", obj.getStr("low"));
+            kline.put("volume", obj.getStr("volume"));
+            allData.add(kline);
+        }
+        return allData;
     }
 
     @SuppressWarnings("unchecked")

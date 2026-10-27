@@ -17,6 +17,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class DashboardService {
 
+    private final StockService stockService;
+
     private static final String TENCENT_API_URL = "http://qt.gtimg.cn/q=";
     private static final String TENCENT_RANK_URL = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/rankTopN/getHsRank?p=1&o=1&l=10&v=list_data";
     private static final String TENCENT_NEWS_URL = "https://proxy.finance.qq.com/ifzqgtimg/appstock/news/info/search?keyword=&page=1&length=20";
@@ -39,12 +41,33 @@ public class DashboardService {
      */
     public List<Map<String, Object>> getIndices() {
         List<Map<String, Object>> result = new ArrayList<>();
-        String codes = String.join(",", INDEX_MAP.values());
+        // 主数据源：同花顺（A股指数，经 StockService 批量快照）
+        try {
+            result.addAll(stockService.getMainIndices());
+        } catch (Exception e) {
+            log.warn("同花顺指数获取失败: {}", e.getMessage());
+        }
+        // 美股/港股指数：同花顺公开接口不支持，走腾讯
+        Map<String, String> extra = new LinkedHashMap<>();
+        extra.put("纳斯达克", "usNDAQ");
+        extra.put("道琼斯", "usDJI");
+        extra.put("恒生指数", "hkHSI");
+        result.addAll(fetchTencentIndices(extra));
+
+        if (result.isEmpty()) {
+            result.addAll(fetchTencentIndices(INDEX_MAP));
+        }
+        return result;
+    }
+
+    private List<Map<String, Object>> fetchTencentIndices(Map<String, String> nameToCode) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        String codes = String.join(",", nameToCode.values());
         try {
             String resp = HttpUtil.get(TENCENT_API_URL + codes, 5000);
             String[] lines = resp.split(";");
             Map<String, String> codeToName = new LinkedHashMap<>();
-            INDEX_MAP.forEach((name, code) -> codeToName.put(code, name));
+            nameToCode.forEach((name, code) -> codeToName.put(code, name));
 
             for (String line : lines) {
                 line = line.trim();

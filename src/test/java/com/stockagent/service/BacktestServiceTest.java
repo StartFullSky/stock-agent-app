@@ -33,7 +33,6 @@ class BacktestServiceTest {
     @BeforeEach
     void setUp() {
         backtestService = new BacktestService(stockService, technicalIndicatorService);
-        ReflectionTestUtils.setField(backtestService, "httpTimeout", 10000);
     }
 
     @Nested

@@ -11,6 +11,22 @@
 - 📈 **策略回测** — 双均线策略历史回测验证
 - 🔍 **股票搜索** — 中文名搜A股、英文代码搜美股、数字搜港股
 - 🤖 **AI对话** — 自然语言交互，AI自动调用合适工具
+- 🏦 **权威数据源** — 同花顺金融数据（fuyao.aicubes.cn）为主数据源，腾讯/新浪自动兜底
+
+## 📊 数据源
+
+A股/指数的行情、K线、标的消歧优先走**同花顺金融数据服务**（REST，`thscode` 唯一代码消歧，
+历史K线默认前复权），失败或不支持（美股/港股）时自动回退腾讯行情/新浪K线。
+
+API Key 获取：<https://fuyao.aicubes.cn/admin/>（同花顺APP扫码登录后创建）。
+配置方式（二选一，不入库不入Git）：
+
+```bash
+# 环境变量
+export HITHINK_FINANCE_API_KEY=<your-key>
+# 或用户级凭据文件：%APPDATA%\hithink-finance\credentials.env
+#   HITHINK_FINANCE_API_KEY=*** 未配置 Key 时自动降级为腾讯/新浪数据源。
+```
 
 ## 🛠️ 技术栈
 
@@ -25,6 +41,7 @@
 | Redis | 缓存 |
 | Knife4j | API文档 |
 | Hutool | 工具库 |
+| 同花顺金融数据 | 主行情数据源（REST API） |
 
 ## 🚀 快速开始
 

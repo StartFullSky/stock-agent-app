@@ -44,6 +44,14 @@ cache:
   kline-ttl: 3600
   search-ttl: 600
 
+# 同花顺金融数据（主数据源，https://fuyao.aicubes.cn）
+# API Key 从环境变量 HITHINK_FINANCE_API_KEY 或用户级 credentials.env 读取，不要提交到 Git
+hithink:
+  enabled: ${HITHINK_FINANCE_ENABLED:true}
+  base-url: ${HITHINK_FINANCE_BASE_URL:https://fuyao.aicubes.cn}
+  api-key: ${HITHINK_FINANCE_API_KEY:}
+  timeout: 8000
+
 # HTTP超时配置（毫秒）
 http:
   timeout:

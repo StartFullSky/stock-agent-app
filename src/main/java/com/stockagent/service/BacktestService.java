@@ -16,7 +16,7 @@ import java.util.*;
 /**
  * 回测服务
  * 支持：均线策略、买入持有策略、RSI策略、MACD策略、布林带策略、信号评估
- * 数据源：腾讯行情API（免费）
+ * 数据源：同花顺金融数据（主，前复权）+ 腾讯行情（兜底）
  */
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,11 +25,6 @@ import org.springframework.beans.factory.annotation.Value;
 @Slf4j
 @RequiredArgsConstructor
 public class BacktestService {
-
-    private static final String TENCENT_KLINE_URL = "http://web.ifzq.gtimg.cn/appstock/app/fqkline/get";
-
-    @Value("${http.timeout.kline:10000}")
-    private int httpTimeout;
 
     private final StockService stockService;
     private final TechnicalIndicatorService technicalIndicatorService;
@@ -447,37 +442,15 @@ public class BacktestService {
     }
 
     private List<Map<String, Object>> fetchKlineData(String stockCode, String startDate, String endDate) {
-        List<Map<String, Object>> klines = new ArrayList<>();
+        // 统一经 StockService 取数：同花顺主数据源（前复权），失败自动回退
         try {
-            // 使用正确的市场代码判断，复用StockService的市场检测逻辑
-            String code = stockService.toTencentCode(stockCode);
-            String url = TENCENT_KLINE_URL + "?param=" + code + ",day," + startDate + "," + endDate + ",500,qfq";
-            String response = HttpUtil.get(url, httpTimeout);
-            if (StrUtil.isBlank(response)) return klines;
-
-            JSONObject json = JSONUtil.parseObj(response);
-            JSONObject data = json.getJSONObject("data");
-            if (data == null) return klines;
-            JSONObject stockData = data.getJSONObject(code);
-            if (stockData == null) return klines;
-
-            JSONArray dayArr = stockData.getJSONArray("qfqday");
-            if (dayArr == null) dayArr = stockData.getJSONArray("day");
-            if (dayArr == null) return klines;
-
-            for (int i = 0; i < dayArr.size(); i++) {
-                JSONArray day = dayArr.getJSONArray(i);
-                if (day.size() >= 5) {
-                    Map<String, Object> kline = new HashMap<>();
-                    kline.put("date", day.getStr(0)); kline.put("open", day.getStr(1));
-                    kline.put("close", day.getStr(2)); kline.put("high", day.getStr(3)); kline.put("low", day.getStr(4));
-                    klines.add(kline);
-                }
-            }
-        } catch (Exception e) { log.error("获取K线数据失败", e); }
-        return klines;
+            List<Map<String, Object>> klines = stockService.getKlineData(stockCode, startDate, endDate, 500);
+            return klines == null ? new ArrayList<>() : klines;
+        } catch (Exception e) {
+            log.error("获取K线数据失败", e);
+            return new ArrayList<>();
+        }
     }
-
 
 
     private BigDecimal calculateMA(List<Map<String, Object>> klines, int endIndex, int period) {

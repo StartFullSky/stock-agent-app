@@ -5,6 +5,7 @@ import cn.hutool.http.HttpUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.stockagent.dto.StockQuoteDTO;
 import com.stockagent.entity.Watchlist;
 import com.stockagent.mapper.WatchlistMapper;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +21,8 @@ import java.util.stream.Collectors;
 public class WatchlistService {
 
     private final WatchlistMapper watchlistMapper;
+    private final StockService stockService;
+    private final HithinkFinanceService hithink;
 
     private static final String TENCENT_API_URL = "http://qt.gtimg.cn/q=";
 
@@ -123,10 +126,28 @@ public class WatchlistService {
         // Fetch A-share quotes
         List<Watchlist> aItems = byMarket.getOrDefault("A", new ArrayList<>());
         if (!aItems.isEmpty()) {
-            String codes = aItems.stream()
-                .map(w -> "s_" + w.getStockCode().toLowerCase())
-                .collect(Collectors.joining(","));
-            try {
+            // 主数据源：同花顺行情（经 StockService，内部失败自动回退腾讯）
+            Map<String, StockQuoteDTO> hqMap = fetchASharesHithink(aItems);
+            if (!hqMap.isEmpty()) {
+                for (Watchlist w : aItems) {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("id", w.getId());
+                    item.put("stockCode", w.getStockCode());
+                    item.put("stockName", w.getStockName());
+                    item.put("market", w.getMarket());
+                    item.put("groupName", w.getGroupName());
+                    StockQuoteDTO q = hqMap.get(w.getStockCode());
+                    if (q != null && q.getCurrentPrice() != null) {
+                        item.put("price", q.getCurrentPrice().toPlainString());
+                        item.put("changeRate", q.getChangeRate() == null ? "0" : q.getChangeRate().toPlainString());
+                    }
+                    result.add(item);
+                }
+            } else {
+                String codes = aItems.stream()
+                    .map(w -> "s_" + w.getStockCode().toLowerCase())
+                    .collect(Collectors.joining(","));
+                try {
                 String resp = HttpUtil.get(TENCENT_API_URL + codes, 5000);
                 Map<String, String> quoteMap = parseTencentQuotes(resp);
                 for (Watchlist w : aItems) {
@@ -147,16 +168,17 @@ public class WatchlistService {
                     }
                     result.add(item);
                 }
-            } catch (Exception e) {
-                log.error("Fetch quotes failed", e);
-                for (Watchlist w : aItems) {
-                    Map<String, Object> item = new LinkedHashMap<>();
-                    item.put("id", w.getId());
-                    item.put("stockCode", w.getStockCode());
-                    item.put("stockName", w.getStockName());
-                    item.put("market", w.getMarket());
-                    item.put("groupName", w.getGroupName());
-                    result.add(item);
+                } catch (Exception e) {
+                    log.error("Fetch quotes failed", e);
+                    for (Watchlist w : aItems) {
+                        Map<String, Object> item = new LinkedHashMap<>();
+                        item.put("id", w.getId());
+                        item.put("stockCode", w.getStockCode());
+                        item.put("stockName", w.getStockName());
+                        item.put("market", w.getMarket());
+                        item.put("groupName", w.getGroupName());
+                        result.add(item);
+                    }
                 }
             }
         }
@@ -176,6 +198,23 @@ public class WatchlistService {
         }
 
         return result;
+    }
+
+    /** 同花顺批量行情（含单标的回退），不可用或全部失败返回空 Map */
+    private Map<String, StockQuoteDTO> fetchASharesHithink(List<Watchlist> aItems) {
+        Map<String, StockQuoteDTO> map = new HashMap<>();
+        if (!hithink.isAvailable()) return map;
+        for (Watchlist w : aItems) {
+            try {
+                StockQuoteDTO q = stockService.getQuote(w.getStockCode());
+                if (q != null && q.getCurrentPrice() != null && !"未知".equals(q.getStockName())) {
+                    map.put(w.getStockCode(), q);
+                }
+            } catch (Exception e) {
+                log.warn("自选股行情获取失败 {}: {}", w.getStockCode(), e.getMessage());
+            }
+        }
+        return map;
     }
 
     private Map<String, String> parseTencentQuotes(String resp) {

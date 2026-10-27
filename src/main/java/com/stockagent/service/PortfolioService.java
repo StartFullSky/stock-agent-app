@@ -26,6 +26,8 @@ public class PortfolioService {
 
     private final PortfolioMapper portfolioMapper;
     private final PortfolioTradeMapper tradeMapper;
+    private final StockService stockService;
+    private final HithinkFinanceService hithink;
 
     private static final String TENCENT_API_URL = "http://qt.gtimg.cn/q=";
 
@@ -223,6 +225,17 @@ public class PortfolioService {
     }
 
     private BigDecimal fetchCurrentPrice(String stockCode, String market) {
+        // 主数据源：同花顺（A股）；美股/港股不支持，走腾讯
+        if (!"HK".equals(market) && !"US".equals(market) && hithink.isAvailable()) {
+            try {
+                com.stockagent.dto.StockQuoteDTO q = stockService.getQuote(stockCode);
+                if (q != null && q.getCurrentPrice() != null && !"未知".equals(q.getStockName())) {
+                    return q.getCurrentPrice();
+                }
+            } catch (Exception e) {
+                log.warn("同花顺获取现价失败 {}: {}", stockCode, e.getMessage());
+            }
+        }
         try {
             String prefix = "HK".equals(market) ? "hk" : "US".equals(market) ? "us" : "s_";
             String code = prefix + stockCode.toLowerCase();
